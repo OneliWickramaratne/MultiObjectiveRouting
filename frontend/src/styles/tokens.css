@@ -1,0 +1,138 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+:root {
+  /* Content surfaces — a warm-cool light grey, not stark white, so cards
+     and the page background read as distinct layers. */
+  --bg: #eef2f1;
+  --surface: #ffffff;
+  --surface-raised: #f6f9f8;
+  --surface-hover: #e9f1ef;
+  --border: #d7e3e0;
+  --border-soft: #e5edeb;
+
+  /* Command rail — deep clinical navy, the console's "frame". Distinct
+     from the content area so the app reads as a real instrument panel,
+     not a single flat sheet. */
+  --rail-bg: #0d2436;
+  --rail-bg-raised: #12314a;
+  --rail-border: #1c3f57;
+  --rail-text: #e6f0ee;
+  --rail-text-dim: #82a3ab;
+  --rail-text-faint: #4f7480;
+
+  /* Text (content area) */
+  --text: #142c32;
+  --text-dim: #52706c;
+  --text-faint: #8ba39e;
+
+  /* System accent — clinical teal, used for interactive/brand moments. */
+  --accent: #0ea894;
+  --accent-strong: #0b8776;
+  --accent-deep: #086559;
+  --accent-soft: rgba(14, 168, 148, 0.11);
+  --accent-text: #ffffff;
+
+  /* Triage / pressure spine — ESI-style red/amber/green so status reads
+     instantly at a glance, distinct from the teal brand accent. */
+  --status-critical: #d6453d;
+  --status-critical-soft: rgba(214, 69, 61, 0.10);
+  --status-high: #dc8a1f;
+  --status-high-soft: rgba(220, 138, 31, 0.11);
+  --status-moderate: #279467;
+  --status-moderate-soft: rgba(39, 148, 103, 0.11);
+  --status-stable: #279467;
+  --status-offline: #8497a0;
+  --status-offline-soft: rgba(132, 151, 160, 0.14);
+
+  /* Type */
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Layout */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --sidebar-w: 248px;
+  --topbar-h: 62px;
+  --shadow-card: 0 1px 2px rgba(16, 40, 40, 0.04), 0 10px 24px -14px rgba(16, 40, 40, 0.14);
+  --shadow-pop: 0 20px 50px -18px rgba(10, 30, 30, 0.28);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+button {
+  font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.tone-critical { --tone: var(--status-critical); --tone-soft: var(--status-critical-soft); }
+.tone-high { --tone: var(--status-high); --tone-soft: var(--status-high-soft); }
+.tone-moderate { --tone: var(--status-moderate); --tone-soft: var(--status-moderate-soft); }
+.tone-stable { --tone: var(--status-stable); --tone-soft: var(--status-moderate-soft); }
+.tone-offline { --tone: var(--status-offline); --tone-soft: var(--status-offline-soft); }
+
+/* The signature element: a colored left spine on any card/row that
+   represents an urgency class or capacity-pressure level. */
+.spine {
+  border-left: 4px solid var(--tone, var(--border));
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--tone, var(--text-dim));
+  background: var(--tone-soft, var(--surface-hover));
+}
+
+.icon-chip {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tone, var(--accent-strong));
+  background: var(--tone-soft, var(--accent-soft));
+  flex-shrink: 0;
+}

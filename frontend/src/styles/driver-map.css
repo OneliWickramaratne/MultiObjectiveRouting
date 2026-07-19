@@ -1,0 +1,235 @@
+.maplibre-navigation-shell {
+  background: #dce8f2;
+  height: 100%;
+  position: relative;
+  width: 100%;
+}
+
+.map-loading-panel {
+  align-items: center;
+  background: #071a2f;
+  color: #ffffff;
+  display: flex;
+  font-size: 15px;
+  font-weight: 800;
+  height: 100vh;
+  justify-content: center;
+  width: 100%;
+}
+
+.maplibre-navigation-map {
+  height: 100%;
+  width: 100%;
+}
+
+.maplibre-navigation-map .maplibregl-canvas {
+  outline: none;
+}
+
+.maplibre-navigation-shell::after {
+  display: none;
+}
+
+.maplibre-navigation-controls {
+  bottom: 24px;
+  display: grid;
+  gap: 7px;
+  position: absolute;
+  right: 18px;
+  z-index: 5;
+}
+
+.maplibre-navigation-controls button {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(11, 31, 58, 0.16);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(11, 31, 58, 0.2);
+  color: #0b1f3a;
+  cursor: pointer;
+  display: flex;
+  height: 42px;
+  justify-content: center;
+  padding: 0;
+  width: 42px;
+}
+
+.maplibre-navigation-controls button.active {
+  background: #1677ff;
+  color: #ffffff;
+}
+
+.maplibre-off-route,
+.maplibre-telemetry-status {
+  background: rgba(7, 26, 47, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 8px 10px;
+  position: absolute;
+  z-index: 5;
+}
+
+.maplibre-off-route {
+  background: rgba(185, 28, 28, 0.94);
+  left: 50%;
+  top: 166px;
+  transform: translateX(-50%);
+}
+
+.maplibre-telemetry-status {
+  bottom: 25px;
+  left: 14px;
+}
+
+.maplibre-telemetry-status span {
+  background: #94a3b8;
+  border-radius: 999px;
+  display: inline-block;
+  height: 7px;
+  margin-right: 6px;
+  width: 7px;
+}
+
+.maplibre-telemetry-status span.moving {
+  background: #10b981;
+}
+
+.maplibre-follow-paused {
+  background: rgba(7, 26, 47, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  bottom: 28px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  left: 50%;
+  padding: 9px 12px;
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 5;
+}
+
+.maplibre-ambulance-marker {
+  height: 24px;
+  position: relative;
+  width: 34px;
+}
+
+.maplibre-ambulance-marker .vehicle-visual {
+  display: block;
+  height: 24px;
+  position: relative;
+  transform-origin: center;
+  will-change: transform;
+  width: 34px;
+}
+
+.maplibre-ambulance-marker .vehicle-body,
+.maplibre-ambulance-marker .vehicle-cab {
+  background: var(--vehicle-color);
+  border: 2px solid #ffffff;
+  box-shadow: 0 8px 18px rgba(3, 7, 18, 0.34);
+  position: absolute;
+}
+
+.maplibre-ambulance-marker .vehicle-body {
+  border-radius: 6px 3px 3px 6px;
+  height: 17px;
+  left: 1px;
+  top: 3px;
+  width: 22px;
+}
+
+.maplibre-ambulance-marker .vehicle-cab {
+  border-left: 0;
+  border-radius: 2px 7px 7px 2px;
+  height: 14px;
+  right: 1px;
+  top: 5px;
+  width: 12px;
+}
+
+.maplibre-ambulance-marker .vehicle-visual::after {
+  background:
+    radial-gradient(circle at 5px 3px, #111827 0 3px, transparent 3.2px),
+    radial-gradient(circle at 25px 3px, #111827 0 3px, transparent 3.2px);
+  bottom: -2px;
+  content: "";
+  height: 7px;
+  left: 2px;
+  position: absolute;
+  width: 30px;
+}
+
+.maplibre-ambulance-marker .vehicle-cross {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 900;
+  left: 9px;
+  line-height: 1;
+  position: absolute;
+  text-shadow: 0 1px 2px rgba(15, 23, 42, 0.36);
+  top: 5px;
+  z-index: 2;
+}
+
+.maplibre-ambulance-marker small {
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  bottom: -18px;
+  color: #0b1f3a;
+  font-size: 8px;
+  font-weight: 900;
+  left: 50%;
+  line-height: 1;
+  padding: 2px 4px;
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.maplibre-stop-marker {
+  align-items: center;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  box-shadow: 0 8px 18px rgba(3, 7, 18, 0.28);
+  color: #ffffff;
+  display: flex;
+  font-size: 11px;
+  font-weight: 900;
+  height: 25px;
+  justify-content: center;
+  width: 25px;
+}
+
+.maplibre-stop-marker.pickup {
+  background: #2563eb;
+}
+
+.maplibre-stop-marker.dropoff {
+  background: #dc2626;
+}
+
+.maplibre-stop-marker.base {
+  background: #059669;
+}
+
+.maplibre-hospital-strip {
+  display: none;
+}
+
+.maplibre-hospital-strip span {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(11, 31, 58, 0.1);
+  border-radius: 999px;
+  color: #0b1f3a;
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 5px 8px;
+  white-space: nowrap;
+}

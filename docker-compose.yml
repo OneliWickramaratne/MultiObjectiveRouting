@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hospital_dss}
+      POSTGRES_USER: ${POSTGRES_USER:-hospital_dss}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hospital_dss} -d ${POSTGRES_DB:-hospital_dss}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    profiles: ["cache"]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-hospital_dss}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hospital_dss}}
+      ALLOW_DEFAULT_DEV_USER: "0"
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?Set AUTH_JWT_SECRET in your .env file}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:-icu-transfer-dss}
+      AUTH_JWT_AUDIENCE: ${AUTH_JWT_AUDIENCE:-icu-transfer-web}
+      AUTH_ACCESS_TOKEN_MINUTES: ${AUTH_ACCESS_TOKEN_MINUTES:-10}
+      AUTH_REFRESH_TOKEN_DAYS: ${AUTH_REFRESH_TOKEN_DAYS:-7}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-0}
+      AUTH_MAX_FAILED_LOGINS: ${AUTH_MAX_FAILED_LOGINS:-5}
+      AUTH_LOCKOUT_MINUTES: ${AUTH_LOCKOUT_MINUTES:-15}
+      CORS_ALLOW_ORIGIN_REGEX: ${CORS_ALLOW_ORIGIN_REGEX:-http://(127\.0\.0\.1|localhost):517[0-9]}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-10}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-30000}
+      DB_IDLE_TRANSACTION_TIMEOUT_MS: ${DB_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
+      FLEET_SIMULATION: ${FLEET_SIMULATION:-1}
+      OSM_GRAPH_ROUTING: ${OSM_GRAPH_ROUTING:-1}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+      API_WORKERS: ${API_WORKERS:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8001}:8001"
+    restart: unless-stopped
+    profiles: ["app"]
+
+volumes:
+  postgres_data:
