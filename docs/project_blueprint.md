@@ -135,7 +135,7 @@ Main entities:
 - users
 - audit_logs
 
-See `docs/DATABASE_SCHEMA.md`.
+See `docs/database_schema.md`.
 
 ## API Design
 
@@ -148,7 +148,7 @@ Core API groups:
 - `/api/predictions`
 - `/api/simulations`
 
-See `docs/API_CONTRACT.md`.
+See `docs/api_contract.md`.
 
 ## Evaluation Plan
 

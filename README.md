@@ -63,7 +63,7 @@ Bed reservation and ambulance assignment now use atomic conditional claims,
 but still require PostgreSQL load testing before live deployment.
 
 Alembic now owns the production schema. Migration and PostgreSQL commands are
-documented in [the deployment guide](docs/DEPLOYMENT_GUIDE.md). Existing local
+documented in [the deployment guide](docs/deployment_guide.md). Existing local
 SQLite data can be adopted with the guarded `bootstrap` migration command.
 
 ## Routing modes
@@ -151,19 +151,19 @@ Build a working MVP that lets a user:
 4. Rank destination hospitals.
 5. Show an optimized ambulance route on a map.
 
-See [docs/PROJECT_BLUEPRINT.md](docs/PROJECT_BLUEPRINT.md) for the full plan.
+See [docs/project_blueprint.md](docs/project_blueprint.md) for the full plan.
 
 For the upgraded Google traffic + OSM route-risk design, see
-[docs/ADVANCED_TRAFFIC_MODEL.md](docs/ADVANCED_TRAFFIC_MODEL.md).
+[docs/advanced_traffic_model.md](docs/advanced_traffic_model.md).
 
-For local endpoint testing, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md).
+For local endpoint testing, see [docs/testing_guide.md](docs/testing_guide.md).
 
 ## Production-readiness documentation
 
-- [Current architecture](docs/CURRENT_SYSTEM_ARCHITECTURE.md)
-- [Architecture audit](docs/ARCHITECTURE_AUDIT.md)
-- [Security threat model](docs/SECURITY_THREAT_MODEL.md)
-- [Production optimization plan](docs/PRODUCTION_OPTIMIZATION_PLAN.md)
-- [Deployment guide](docs/DEPLOYMENT_GUIDE.md)
-- [Operations runbook](docs/OPERATIONS_RUNBOOK.md)
-- [Model documentation](docs/MODEL_DOCUMENTATION.md)
+- [Current architecture](docs/current_system_architecture.md)
+- [Architecture audit](docs/architecture_audit.md)
+- [Security threat model](docs/security_threat_model.md)
+- [Production optimization plan](docs/production_optimization_plan.md)
+- [Deployment guide](docs/deployment_guide.md)
+- [Operations runbook](docs/operations_runbook.md)
+- [Model documentation](docs/model_documentation.md)
