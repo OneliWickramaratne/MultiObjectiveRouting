@@ -1,0 +1,25 @@
+origin,destination,urgency,shortest_minutes,shortest_risk,aware_minutes,aware_risk,minutes_delta,risk_delta
+National Hospital Sri Lanka,Colombo South Teaching Hospital,critical,12.0,0.62,12.0,0.54,0.0,-0.08
+National Hospital Sri Lanka,Colombo South Teaching Hospital,high,12.0,0.62,12.0,0.54,0.0,-0.08
+National Hospital Sri Lanka,Colombo South Teaching Hospital,moderate,12.0,0.62,12.2,0.49,0.2,-0.13
+National Hospital Sri Lanka,Durdans Hospital,critical,6.7,0.68,6.8,0.52,0.1,-0.16
+National Hospital Sri Lanka,Durdans Hospital,high,6.7,0.68,6.8,0.52,0.1,-0.16
+National Hospital Sri Lanka,Durdans Hospital,moderate,6.7,0.68,6.8,0.52,0.1,-0.16
+Sri Jayewardenepura General Hospital,Asiri Central Hospital,critical,20.1,0.61,20.1,0.53,0.0,-0.08
+Sri Jayewardenepura General Hospital,Asiri Central Hospital,high,20.1,0.61,20.1,0.53,0.0,-0.08
+Sri Jayewardenepura General Hospital,Asiri Central Hospital,moderate,20.1,0.61,20.2,0.51,0.1,-0.1
+Nawaloka Hospital,Lanka Hospital,critical,9.0,0.53,9.0,0.45,0.0,-0.08
+Nawaloka Hospital,Lanka Hospital,high,9.0,0.53,9.0,0.45,0.0,-0.08
+Nawaloka Hospital,Lanka Hospital,moderate,9.0,0.53,9.3,0.42,0.3,-0.11
+Colombo South Teaching Hospital,De Soysa Hospital for Women,critical,11.5,0.6,11.5,0.52,0.0,-0.08
+Colombo South Teaching Hospital,De Soysa Hospital for Women,high,11.5,0.6,11.8,0.46,0.3,-0.14
+Colombo South Teaching Hospital,De Soysa Hospital for Women,moderate,11.5,0.6,11.8,0.46,0.3,-0.14
+Durdans Hospital,National Hospital Sri Lanka,critical,6.5,0.64,6.5,0.56,0.0,-0.08
+Durdans Hospital,National Hospital Sri Lanka,high,6.5,0.64,6.5,0.56,0.0,-0.08
+Durdans Hospital,National Hospital Sri Lanka,moderate,6.5,0.64,6.5,0.56,0.0,-0.08
+Asiri Central Hospital,Nawaloka Hospital,critical,4.6,0.66,4.6,0.58,0.0,-0.08
+Asiri Central Hospital,Nawaloka Hospital,high,4.6,0.66,4.6,0.58,0.0,-0.08
+Asiri Central Hospital,Nawaloka Hospital,moderate,4.6,0.66,4.6,0.58,0.0,-0.08
+Lanka Hospital,Colombo South Teaching Hospital,critical,5.5,0.64,5.5,0.56,0.0,-0.08
+Lanka Hospital,Colombo South Teaching Hospital,high,5.5,0.64,5.5,0.56,0.0,-0.08
+Lanka Hospital,Colombo South Teaching Hospital,moderate,5.5,0.64,5.5,0.56,0.0,-0.08
