@@ -1,166 +1,124 @@
 # Database Schema
 
-Database: PostgreSQL with PostGIS.
+This documents the **actual current schema** as implemented in
+`backend/app/models.py` (SQLAlchemy). This replaces an earlier draft that
+described a different, PostGIS-native design used for initial planning —
+that design was reworked during implementation to the schema below.
+
+Local development runs on **SQLite** (`backend/hospital_dss_dev.db`).
+Production is designed to run on **PostgreSQL** using the same schema
+(SQLAlchemy is database-agnostic; no PostGIS-specific column types are
+required by the current design, since geographic queries are handled at
+the application layer using latitude/longitude columns rather than a
+native `geography` type).
 
 ## hospitals
 
 | Column | Type | Notes |
-| --- | --- | --- |
+|---|---|---|
 | id | text primary key | Stable hospital identifier |
 | name | text | Hospital name |
-| type | text | teaching, general, specialized |
-| address | text | Optional |
-| latitude | numeric | WGS84 latitude |
-| longitude | numeric | WGS84 longitude |
-| geom | geography(Point, 4326) | PostGIS point |
-| active | boolean | Soft enable/disable |
+| latitude / longitude | float | WGS84 coordinates |
+| icu_type | text | Primary/display ICU type label |
+| total_beds / occupied_beds | integer | Kept in sync from `icu_beds` |
+| supports_trauma / cardiac / neuro / pediatric / maternity | boolean | Condition-support flags |
+| has_ventilator_support | boolean | |
+| phone / address | text, nullable | |
+| updated_at | datetime | |
 
-## icu_units
+Note: a hospital's real ICU **specialty mix** is derived from its
+`icu_beds` rows (a hospital can run more than one ICU type at once —
+see below), not from the single `icu_type` column, which is only a
+display label.
 
-| Column | Type | Notes |
-| --- | --- | --- |
-| id | uuid primary key | ICU unit id |
-| hospital_id | text foreign key | Linked hospital |
-| icu_type | text | medical, surgical, pediatric, cardiac, trauma, neuro |
-| total_beds | integer | Total ICU beds |
-| ventilator_supported | boolean | Whether ventilators are supported |
-| supported_conditions | text[] | Matching condition categories |
+## icu_beds
 
-## icu_bed_status
+Bed-level records — this is the actual source of truth for capacity and
+specialty, not a hospital-level aggregate.
 
 | Column | Type | Notes |
-| --- | --- | --- |
-| id | uuid primary key | Status event id |
-| icu_unit_id | uuid foreign key | Linked ICU unit |
-| occupied_beds | integer | Current occupied beds |
-| available_beds | integer | Generated or calculated |
-| source | text | manual, synthetic, integration |
-| updated_at | timestamptz | Status timestamp |
-| updated_by | text | User/system |
+|---|---|---|
+| id | text primary key | |
+| hospital_id | FK → hospitals.id | |
+| bed_no | text | Unique per hospital |
+| icu_type | text | This specific bed's ICU specialty |
+| ward | text | Ward/room grouping |
+| status | text | available, occupied, reserved, transfer_assigned, cleaning, maintenance |
+| fhir_location_id | text, nullable | For future HL7 FHIR integration |
+| operational_status / status_reason | text, nullable | |
+| updated_at | datetime | |
 
-## transfer_requests
+Relationship: one bed → at most one `patient_records` row.
 
-| Column | Type | Notes |
-| --- | --- | --- |
-| id | uuid primary key | Transfer request id |
-| origin_hospital_id | text | Starting hospital |
-| required_icu_type | text | Needed ICU |
-| condition_type | text | Patient condition category |
-| urgency_class | text | critical, high, moderate |
-| urgency_score | numeric | 0 to 1 |
-| created_at | timestamptz | Request time |
+## patient_records
 
-## route_options
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| id | uuid primary key | Route option id |
-| transfer_request_id | uuid foreign key | Linked request |
-| destination_hospital_id | text | Candidate hospital |
-| strategy | text | shortest_time, multi_objective |
-| estimated_minutes | numeric | Estimated transfer time |
-| distance_km | numeric | Route distance |
-| risk_score | numeric | 0 to 1 |
-| total_score | numeric | Recommendation score |
-| geometry | geography(LineString, 4326) | Route line |
+Patient identity and clinical packet, linked 1:1 to an occupied bed and
+optionally to the transfer that brought them there.
 
 ## users
 
 | Column | Type | Notes |
-| --- | --- | --- |
-| id | uuid primary key | User id |
-| name | text | Display name |
-| email | text unique | Login identity |
-| role | text | dispatcher, hospital_admin, researcher |
-| hospital_id | text nullable | Hospital scope |
+|---|---|---|
+| id | text primary key | |
+| name | text | |
+| role | text | super_admin, hospital_admin, ambulance_crew |
+| hospital_id | FK, nullable | Scope for hospital admins |
+| ambulance_id | FK, nullable | Scope for ambulance crew |
+| username | text, unique | Login identity (not email) |
+| password_hash | text, nullable | Argon2 hash |
+| is_active | boolean | |
+| failed_login_count / locked_until | | Brute-force lockout |
+| last_login_at / password_changed_at | datetime, nullable | |
 
-## audit_logs
+## auth_sessions / event_stream_tickets
+
+Support refresh-token session tracking and short-lived tickets for
+authenticating the ambulance telemetry WebSocket connection.
+
+## ambulances
 
 | Column | Type | Notes |
-| --- | --- | --- |
-| id | uuid primary key | Audit event id |
-| actor_user_id | uuid | User who acted |
-| action | text | Event name |
-| entity_type | text | Entity changed |
-| entity_id | text | Entity id |
-| created_at | timestamptz | Event time |
+|---|---|---|
+| id | text primary key | |
+| call_sign | text | |
+| base_hospital_id | FK, nullable | |
+| status | text | available, assigned, en_route, transporting, offline |
+| latitude / longitude | float | Live position |
+| crew_contact | text, nullable | |
+| heading_degrees / speed_kph / route_progress_m | float | Motion telemetry |
+| navigation_leg | text, nullable | |
+| telemetry_updated_at | datetime, nullable | |
 
-## Current Implementation
+## transfer_requests
 
-The backend now uses SQLAlchemy models in:
+The central workflow table — one row per transfer, carrying both the
+operational state and the full clinical handover packet.
 
-```text
-backend/app/models.py
-```
+| Column | Type | Notes |
+|---|---|---|
+| id | text primary key | |
+| origin_hospital_id / destination_hospital_id | FK | |
+| requested_by_user_id | FK → users.id | |
+| status | text | pending_acceptance → accepted_pending_ambulance → ambulance_assigned → ambulance_en_route_to_pickup → en_route_to_destination → completed (or rejected) |
+| patient_name, age, sex, blood_type, allergies, emergency_contact, identifier_value, date_of_birth, diagnosis | | Patient identity/clinical fields |
+| patient_vitals_json / patient_medications_json / handover_json | text | JSON-encoded structured fields |
+| patient_condition / required_icu_type | text | Drives hospital matching |
+| urgency_class / urgency_score | text / float | From the urgency scoring service |
+| ventilator_required | boolean | |
+| ambulance_id | FK, nullable | Set once dispatched |
+| assigned_bed_id | FK → icu_beds.id, nullable | Reserved on acceptance |
+| route_payload_json | text | JSON: `{pickup_route, destination_route, mission_route, dispatch}` |
+| pickup/dropoff latitude/longitude | float, nullable | |
+| created_at / updated_at | datetime | |
 
-Default local development database:
+## transfer_events / bed_lifecycle_events / audit_logs
 
-```text
-backend/hospital_dss_dev.db
-```
+Append-only event tables recording, respectively: transfer status
+changes with actor and message, ICU bed status transitions with reason,
+and general admin actions — the audit trail behind every workflow step.
 
-Production target:
+## Full authoritative reference
 
-```text
-PostgreSQL + PostGIS
-```
-
-Set this environment variable before starting FastAPI to use PostgreSQL:
-
-```powershell
-$env:DATABASE_URL="postgresql+psycopg://hospital_dss:hospital_dss@localhost:5432/hospital_dss"
-```
-
-Seed/init command:
-
-```powershell
-cd C:\Users\antho\OneDrive\Documents\Hospital\backend
-& C:\Users\antho\AppData\Local\Programs\Python\Python313\python.exe -m app.seed_db
-```
-
-## Operational Workflow Tables
-
-The current database-backed MVP includes:
-
-- `hospitals`: hospital profile, ICU capability, current occupied beds
-- `users`: super admin and one admin user per hospital
-- `ambulances`: ambulance pool, status, current/base location
-- `transfer_requests`: hospital A to hospital B transfer request lifecycle
-- `audit_logs`: update/action trail
-
-Transfer status flow:
-
-```text
-pending_acceptance
-accepted_pending_ambulance
-ambulance_assigned
-en_route_pickup
-en_route_dropoff
-completed
-```
-
-Rejection status:
-
-```text
-rejected
-```
-
-Ambulance dispatch is automated after the destination hospital accepts the transfer. The dispatcher currently selects the available ambulance with the best score:
-
-```text
-score = distance_to_pickup_km - same_origin_hospital_bonus
-```
-
-The selected ambulance receives a mission through:
-
-```text
-GET /api/ambulance/mission
-```
-
-Mission actions:
-
-```text
-start-pickup
-arrive-pickup
-complete
-```
+For exact column types, constraints, and indexes, the definitive source
+is `backend/app/models.py` — this document is a human-readable summary
+of it, not a replacement for it.
