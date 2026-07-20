@@ -1,0 +1,11 @@
+origin,urgency,naive_call_sign,heuristic_call_sign,differs,naive_distance_km,heuristic_distance_km,naive_coverage_penalty,heuristic_coverage_penalty,naive_pickup_risk,heuristic_pickup_risk
+National Hospital Sri Lanka,critical,DS Ambulance 1,DS Ambulance 1,False,0.19,0.19,0.45,0.45,0.82,0.82
+Colombo South Teaching Hospital,high,L Ambulance 1,L Ambulance 1,False,3.2,3.2,0.45,0.45,0.559,0.559
+Lady Ridgeway Hospital,moderate,DS Ambulance 1,DS Ambulance 1,False,0.97,0.97,0.45,0.45,0.627,0.627
+Sri Jayewardenepura General Hospital,critical,CS Ambulance 1,CS Ambulance 1,False,7.68,7.68,0.45,0.45,0.548,0.548
+De Soysa Hospital for Women,high,N Ambulance 1,N Ambulance 1,False,0.19,0.19,0.45,0.45,0.82,0.82
+Nawaloka Hospital,moderate,A Ambulance 1,D Ambulance 1,True,2.29,2.87,0.45,0.45,0.577,0.373
+Asiri Central Hospital,critical,N Ambulance 1,DS Ambulance 1,True,0.82,0.65,0.45,0.45,0.761,0.74
+Lanka Hospital,high,CS Ambulance 1,CS Ambulance 1,False,3.18,3.18,0.45,0.45,0.561,0.561
+Durdans Hospital,moderate,N Ambulance 1,N Ambulance 1,False,3.02,3.02,0.45,0.45,0.441,0.441
+National Hospital Sri Lanka,high,DS Ambulance 1,DS Ambulance 1,False,0.19,0.19,0.45,0.45,0.82,0.82

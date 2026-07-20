@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -188,7 +189,11 @@ class OSMGraphRoutingService:
                     dtype=float,
                 )
                 return len(self._node_ids) > 0
-            except (OSError, nx.NetworkXError, KeyError, TypeError, ValueError):
+            except (OSError, nx.NetworkXError, KeyError, TypeError, ValueError, ET.ParseError):
+                # A missing, truncated, or corrupted graph file must never
+                # crash a caller — this is exactly the fail-open behavior
+                # the routing fallback chain (OSM -> live Google -> cached
+                # traffic model -> direct fallback) depends on.
                 self._graph = None
                 return False
 
