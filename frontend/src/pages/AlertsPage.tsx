@@ -1,12 +1,30 @@
 import { useEffect, useState } from "react";
-import { Activity, Ambulance, CheckCircle2, Siren } from "lucide-react";
+import { Activity, Ambulance, CheckCircle2, Siren, UserCheck } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { useAuth } from "../state/AuthContext";
 import { TransferDetailDrawer } from "../components/TransferDetailDrawer";
 import type { CapacityForecastSummary, DashboardSummary, TransferEventSummary, TransferSummary } from "../types";
 
+// The destination leg's ETA is already computed and stored on the transfer
+// (same route_payload_json used by the mission map and network map) — this
+// just surfaces it as a reception-prep alert rather than adding any new
+// backend logic or role.
+function destinationEtaMinutes(transfer: TransferSummary): number | null {
+  if (!transfer.route_payload_json) return null;
+  try {
+    const parsed = JSON.parse(transfer.route_payload_json) as {
+      destination_route?: { estimated_minutes?: number };
+      mission_route?: { estimated_minutes?: number };
+    };
+    const minutes = parsed.destination_route?.estimated_minutes ?? parsed.mission_route?.estimated_minutes;
+    return typeof minutes === "number" ? minutes : null;
+  } catch {
+    return null;
+  }
+}
+
 export function AlertsPage() {
-  const { hospitals, backendOnline } = useAuth();
+  const { hospitals, backendOnline, user } = useAuth();
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [forecast, setForecast] = useState<CapacityForecastSummary | null>(null);
   const [selectedTransfer, setSelectedTransfer] = useState<TransferSummary | null>(null);
@@ -47,12 +65,17 @@ export function AlertsPage() {
   const criticalTransfers = (dashboard?.transfers ?? []).filter(
     (t) => t.urgency_class === "critical" && !["completed", "rejected"].includes(t.status),
   );
+  const incomingPatients = (dashboard?.transfers ?? []).filter((t) => {
+    if (t.status !== "en_route_to_destination") return false;
+    if (user?.role === "hospital_admin" && t.destination_hospital_id !== user.hospital_id) return false;
+    return true;
+  });
   const offlineAmbulances = (dashboard?.ambulances ?? []).filter((a) => a.status === "offline");
   const pressuredHospitals = (forecast?.hospitals ?? []).filter(
     (h) => h.points[0] && ["high", "critical"].includes(h.points[0].pressure_level),
   );
 
-  const hasAnyAlert = criticalTransfers.length > 0 || offlineAmbulances.length > 0 || pressuredHospitals.length > 0 || !backendOnline;
+  const hasAnyAlert = criticalTransfers.length > 0 || incomingPatients.length > 0 || offlineAmbulances.length > 0 || pressuredHospitals.length > 0 || !backendOnline;
 
   return (
     <div className="page">
@@ -63,6 +86,19 @@ export function AlertsPage() {
           <span>{backendOnline ? "Live updates are operational." : "Actions are temporarily unavailable."}</span>
         </div>
       </div>
+
+      {incomingPatients.map((t) => {
+        const eta = destinationEtaMinutes(t);
+        return (
+          <button key={`incoming-${t.id}`} type="button" className="alert-row tone-high alert-row-clickable" onClick={() => void openDetail(t)}>
+            <UserCheck size={18} />
+            <div>
+              <strong>Patient arriving{eta != null ? ` in ~${Math.round(eta)} min` : " soon"} — prepare reception</strong>
+              <span>{t.patient_name ?? "Unnamed patient"} from {hospitalName(t.origin_hospital_id)} → {hospitalName(t.destination_hospital_id)}</span>
+            </div>
+          </button>
+        );
+      })}
 
       {criticalTransfers.map((t) => (
         <button key={t.id} type="button" className="alert-row tone-critical alert-row-clickable" onClick={() => void openDetail(t)}>
