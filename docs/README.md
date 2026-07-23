@@ -24,8 +24,6 @@ A guide to what's in this folder and when to read each document.
 - **[evaluation_results.md](evaluation_results.md)** — measured results: urgency model comparison, routing risk/time tradeoff, traffic model comparison.
 - **[architecture_audit.md](architecture_audit.md)** — a critical review of the current architecture: strengths, gaps, and technical debt.
 - **[security_threat_model.md](security_threat_model.md)** — authentication, authorization, and data-protection posture, plus what's still needed before real clinical use.
-- **[production_optimization_plan.md](production_optimization_plan.md)** — what would need to change to run this at production scale (performance, routing engine, caching).
-- **[operations_runbook.md](operations_runbook.md)** — day-2 operations: monitoring, incident response, common failure modes.
 
 ## Suggested reading order for an examiner
 

@@ -1,6 +1,6 @@
 # Current System Architecture
 
-Last reviewed: 2026-07-13
+Last reviewed: 2026-07-23
 
 ## Purpose
 
@@ -15,17 +15,19 @@ The system is decision support only. Recommendations must remain explainable and
 - `backend/app/schemas.py` defines Pydantic request and response contracts.
 - `backend/app/api/routes/` contains HTTP routes for admin, ambulance, hospitals, predictions, routes, traffic, and transfer recommendations.
 - `backend/app/services/` contains urgency scoring, transfer recommendation, traffic prediction, OSM routing, dispatch, capacity forecasting, simulation analytics, sensitive-data redaction, and transfer state validation.
-- `frontend/src/App.tsx` contains most React application state and UI.
+- `backend/scripts/` contains the migration bootstrap script and the reproducible evaluation scripts (`eval_routing.py`, `eval_dispatch.py`, `eval_simulation.py`) and their chart generators, each calling the production service classes directly rather than a separate simulation.
+- `frontend/src/pages/` contains one file per screen (Overview, Transfer planner, Requests, Fleet, Capacity, ICU beds, Transfers, Alerts, Network map, Active mission).
 - `frontend/src/components/ThreeDNavigationMap.tsx` provides MapLibre-based driver navigation.
-- `ml/`, `data/`, and `_incoming_hos_zip/` contain model/data artifacts when available.
-- `docs/` contains architecture, API, database, traffic-model, testing, deployment, and operations documentation.
+- `ml/` contains the synthetic urgency dataset, training scripts, and trained model artifacts. `colab/` contains the traffic-data-collection and traffic-model-training notebooks (large datasets/artifacts are kept in Drive, not committed — see `colab/README.md`).
+- `data/osm/colombo_drive.graphml` is the real Colombo road network graph used by OSM routing (63,951 nodes, 126,278 edges).
+- `docs/` contains architecture, API, database, traffic-model, testing, deployment, operations, and evaluation-results documentation.
 
 ## Backend Entry Points
 
 - FastAPI app: `backend/app/main.py`
 - Startup: `init_db()`, model/routing warmup, `fleet_simulation_service.start()`
 - Health endpoints: `GET /health`, `GET /ready`
-- Development startup script: `start-hospital.ps1`
+- Local development startup: `source .venv/bin/activate && python -m uvicorn app.main:app --host 127.0.0.1 --port 8001` (see `docs/testing_guide.md`)
 
 ## API Endpoints
 
@@ -65,7 +67,7 @@ Authenticated admin/crew endpoints:
 
 Primary entities:
 
-- `HospitalModel`: hospital identity, location, ICU capability, high-level bed counts.
+- `HospitalModel`: hospital identity, location, a primary ICU type label, high-level bed counts. A hospital's real ICU specialty mix (a hospital can run more than one ICU ward at once, e.g. Trauma + General + Cardiac) is derived from its `ICUBedModel` rows, not this single label.
 - `UserModel`: operator identity, role, Argon2 credential hash, activation, and lockout state.
 - `AuthSessionModel`: revocable refresh session with hashed rotating refresh and CSRF secrets.
 - `EventStreamTicketModel`: short-lived one-use authorization for browser SSE connections.
@@ -116,7 +118,7 @@ Invalid direct transitions, such as pending to completed or completed to assigne
 ## Bed Reservation Lifecycle
 
 - Receiving hospital accepts transfer.
-- `reserve_transfer_bed()` finds an available destination ICU bed.
+- `reserve_transfer_bed()` finds an available destination ICU bed matching the specific requested ICU type — a hospital with a full Cardiac ICU but an open Trauma ICU bed remains eligible for a trauma transfer.
 - Bed becomes `transfer_assigned`.
 - A patient record is created from the transfer handover.
 - On ambulance completion, the bed becomes `occupied`.
@@ -136,20 +138,25 @@ Important limitation: bed selection is not yet protected by row-level locks or u
 
 Important limitation: assignment is not yet protected by row-level locks or compare-and-set updates, so concurrent dispatchers can race in production.
 
+Measured evaluation: a dedicated comparison against a naive nearest-distance baseline found the heuristic diverges in 2 of 10 tested scenarios, trading small increases in pickup distance for meaningful reductions in pickup-route risk — see `docs/evaluation_results.md`, reproducible via `backend/scripts/eval_dispatch.py`.
+
 ## Routing Logic
 
-- Local OSM graph routing lives in `OSMGraphRoutingService`.
+- Local OSM graph routing lives in `OSMGraphRoutingService`, using NetworkX A* search with a zero heuristic (mathematically equivalent to Dijkstra) over the real Colombo road graph (63,951 nodes, 126,278 edges).
 - Route source is labelled as local OSM graph or fallback route.
 - The graph returns ordered node IDs, road-following polyline, route steps, risk features, risk factors, and explanations.
-- `RoutingService` compares `shortest_time` and `ml_traffic_risk_aware`.
+- `RoutingService` compares `shortest_time` and `ml_traffic_risk_aware`, weighted by urgency-specific time/risk/distance factors.
 - Google Routes API support exists as an optional traffic-data collector/integration path.
+- A malformed or missing graph file is caught and handled as a graceful fail-open fallback rather than crashing the caller.
+
+Measured evaluation: the urgency-aware strategy reduces road-risk exposure by 13.3%–17.7% depending on urgency, at a time cost scaling from effectively zero (critical) to +0.125 minutes (moderate) — see `docs/evaluation_results.md`, reproducible via `backend/scripts/eval_routing.py`.
 
 ## AI and ML Logic
 
-- Urgency is rule-based via `UrgencyService`.
-- Traffic prediction uses `TrafficModelService`, cached feature rows, and joblib models when present.
+- Urgency is rule-based via `UrgencyService`; a Gradient Boosting classifier trained on synthetic data is evaluated against it and against Logistic Regression/Random Forest baselines (85.0% accuracy, best critical-class recall) — see `docs/evaluation_results.md`, reproducible via `ml/train_urgency_model.py` and `ml/generate_urgency_chart.py`.
+- Traffic prediction uses `TrafficModelService`, cached feature rows, and joblib models when present (Random Forest for congestion ratio, R²=0.978; Gradient Boosting for duration, R²=0.991), trained on one real week of Google Routes API data extended synthetically.
 - Capacity forecasting uses deterministic projected arrivals/releases.
-- Simulation analytics are read-only scenario calculations.
+- Simulation analytics are read-only scenario calculations, evaluated across all four built-in scenarios — see `docs/evaluation_results.md`, reproducible via `backend/scripts/eval_simulation.py`.
 
 Model governance remains incomplete: model cards, training provenance, validation metrics, drift monitoring, and rollback registry must be added before production.
 
@@ -174,9 +181,7 @@ Limitations:
 
 ## Baseline Verification
 
-On 2026-07-13:
-
-- Backend compile passed with `python -m compileall backend/app backend/tests`.
-- Frontend production build passed with `npm.cmd run build`.
-- First-party backend unit tests passed: 5 tests.
-- Known warning: Vite reports a large `ThreeDNavigationMap` chunk above 500 kB.
+- Backend compiles cleanly and imports without error.
+- Frontend production build passes (`npm run build`).
+- Five quantitative evaluation scripts run successfully end-to-end against the production service classes — see `docs/evaluation_results.md`.
+- Known warning: Vite reports a large `ThreeDNavigationMap` chunk above 500 kB, since the 3D driver-navigation map is only needed in ambulance crew mode.
