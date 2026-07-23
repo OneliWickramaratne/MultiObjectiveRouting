@@ -1,5 +1,5 @@
 scenario_label,simulated_transfers,critical_transfers,ambulances_required,ambulance_gap,total_shortage_beds,network_pressure_level
-Baseline demand,3,1,2,0,0,high
-Evening surge,8,3,5,0,0,critical
-Mass casualty,17,12,14,0,0,critical
-Respiratory wave,11,6,7,0,0,critical
+Baseline demand,3,1,2,0,0,elevated
+Evening surge,8,3,5,0,0,high
+Mass casualty,17,12,14,0,0,high
+Respiratory wave,11,6,7,0,0,high
