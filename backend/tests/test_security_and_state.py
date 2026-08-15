@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -24,6 +23,7 @@ from app.services.transfer_state_machine import (
     TRANSFER_PENDING_DESTINATION,
     validate_transfer_transition,
 )
+from app.time_utils import utcnow
 
 
 class SecurityAndStateTests(unittest.TestCase):
@@ -67,7 +67,7 @@ class SecurityAndStateTests(unittest.TestCase):
         auth_session, _, _ = create_session(self.session, self.user)
         self.session.commit()
         token = issue_access_token(self.user, auth_session)
-        auth_session.revoked_at = datetime.utcnow()
+        auth_session.revoked_at = utcnow()
         self.session.commit()
         with self.assertRaises(HTTPException) as context:
             authenticate_access_token(self.session, f"Bearer {token}")

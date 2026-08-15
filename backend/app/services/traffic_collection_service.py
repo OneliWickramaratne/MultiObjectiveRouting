@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import datetime as dt
 import json
 import os
 from pathlib import Path
@@ -11,6 +10,7 @@ import requests
 
 from app.data_store import HOSPITALS, get_hospital
 from app.schemas import TrafficSnapshotRequest
+from app.time_utils import utcnow
 
 
 COMPUTE_ROUTE_MATRIX_URL = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
@@ -71,7 +71,7 @@ class TrafficCollectionService:
             "units": "METRIC",
             "languageCode": "en-US",
             "departureTime": departure_time_iso
-            or dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            or utcnow().replace(microsecond=0).isoformat() + "Z",
         }
         headers = {
             "Content-Type": "application/json",
@@ -94,7 +94,7 @@ class TrafficCollectionService:
         return elements
 
     def _flatten_elements(self, origins, destinations, elements: list[dict[str, Any]]) -> list[dict[str, object]]:
-        request_time_utc = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        request_time_utc = utcnow().replace(microsecond=0).isoformat() + "Z"
         rows: list[dict[str, object]] = []
         for element in elements:
             origin_index = int(element.get("originIndex", -1))

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
 
 from sqlalchemy.orm import Session
 
 from app.models import AmbulanceModel
 from app.services.capacity_forecast_service import HospitalCapacityForecast
+from app.time_utils import utcnow
 
 
 @dataclass(frozen=True)
@@ -97,7 +97,7 @@ class SimulationAnalyticsService:
         network_level = self._pressure_level(worst_pressure, total_shortage_beds)
 
         return {
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": utcnow().isoformat(),
             "scenario": profile.key,
             "scenario_label": profile.label,
             "description": profile.description,

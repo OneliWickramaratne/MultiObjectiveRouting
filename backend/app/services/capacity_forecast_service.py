@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
 from app.models import BedLifecycleEventModel, HospitalModel, ICUBedModel, TransferRequestModel
+from app.time_utils import utcnow
 
 
 @dataclass(frozen=True)
@@ -106,7 +107,7 @@ class CapacityForecastService:
 
     @staticmethod
     def _recent_bed_release_rate(db: Session, hospital_id: str) -> float:
-        since = datetime.utcnow() - timedelta(hours=48)
+        since = utcnow() - timedelta(hours=48)
         releases = (
             db.query(BedLifecycleEventModel)
             .filter(

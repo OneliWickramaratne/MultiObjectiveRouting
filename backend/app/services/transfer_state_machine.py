@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.models import TransferRequestModel
+from app.time_utils import utcnow
 
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 TRANSFER_PENDING_DESTINATION = "pending_destination_acceptance"
@@ -81,7 +78,7 @@ def transition_transfer_atomic(
             TransferRequestModel.id == transfer.id,
             TransferRequestModel.status == current_status,
         )
-        .values(status=next_status, updated_at=_utc_now()),
+        .values(status=next_status, updated_at=utcnow()),
         execution_options={"synchronize_session": False},
     )
     if result.rowcount != 1:
@@ -91,4 +88,4 @@ def transition_transfer_atomic(
             detail=f"Transfer changed concurrently; current status is {transfer.status}",
         )
     transfer.status = next_status
-    transfer.updated_at = _utc_now()
+    transfer.updated_at = utcnow()

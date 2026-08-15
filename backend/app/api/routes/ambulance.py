@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
@@ -26,6 +25,7 @@ from app.services.transfer_state_machine import (
     TRANSFER_EN_ROUTE_TO_PICKUP,
     transition_transfer_atomic,
 )
+from app.time_utils import utcnow
 
 router = APIRouter()
 
@@ -99,10 +99,10 @@ async def telemetry_stream(websocket: WebSocket, ticket: str) -> None:
                 await websocket.send_json(
                     {
                         "kind": "ambulance_telemetry",
-                        "ambulance": ambulance_to_summary(ambulance).model_dump(),
+                        "ambulance": ambulance_to_summary(db, ambulance).model_dump(),
                         "active_transfer_id": transfer.id if transfer else None,
                         "active_transfer_status": transfer.status if transfer else None,
-                        "server_time": datetime.utcnow().isoformat(),
+                        "server_time": utcnow().isoformat(),
                     }
                 )
             await asyncio.sleep(0.5)
@@ -135,8 +135,8 @@ def update_location(
         ambulance.heading_degrees = request.heading_degrees
     if request.speed_kph is not None:
         ambulance.speed_kph = request.speed_kph
-    ambulance.telemetry_updated_at = datetime.utcnow()
-    ambulance.updated_at = datetime.utcnow()
+    ambulance.telemetry_updated_at = utcnow()
+    ambulance.updated_at = utcnow()
     db.commit()
     return mission_response(db, ambulance)
 
@@ -214,11 +214,11 @@ def update_mission_status(
         raise HTTPException(status_code=422, detail="Unknown mission action")
     transfer_status, ambulance_status, event_type, message = status_map[action]
     transition_transfer_atomic(db, transfer, transfer_status)
-    transfer.updated_at = datetime.utcnow()
+    transfer.updated_at = utcnow()
     ambulance.status = ambulance_status
     ambulance.speed_kph = 0.0
     ambulance.route_progress_m = 0.0
-    ambulance.telemetry_updated_at = datetime.utcnow()
+    ambulance.telemetry_updated_at = utcnow()
     if action == "start-pickup":
         ambulance.navigation_leg = "pickup"
     elif action == "arrive-pickup":
@@ -235,7 +235,7 @@ def update_mission_status(
                 previous_status = bed.status
                 bed.status = "occupied"
                 bed.status_reason = "Patient arrived by ambulance and occupied assigned ICU bed."
-                bed.updated_at = datetime.utcnow()
+                bed.updated_at = utcnow()
                 if bed.patient:
                     bed.patient.identifier_system = bed.patient.identifier_system or "urn:ietf:rfc:3986"
                     bed.patient.identifier_value = transfer.patient_identifier_value or bed.patient.identifier_value
@@ -254,7 +254,7 @@ def update_mission_status(
                     bed.patient.emergency_contact = transfer.patient_emergency_contact
                     bed.patient.transfer_id = transfer.id
                     bed.patient.notes = transfer.notes
-                    bed.patient.updated_at = datetime.utcnow()
+                    bed.patient.updated_at = utcnow()
                 record_bed_lifecycle_event(
                     db,
                     bed,
@@ -266,7 +266,7 @@ def update_mission_status(
                     transfer.id,
                 )
                 sync_hospital_bed_counts(db, bed.hospital_id)
-    ambulance.updated_at = datetime.utcnow()
+    ambulance.updated_at = utcnow()
     add_transfer_event(
         db,
         transfer,

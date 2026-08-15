@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import os
 
@@ -9,6 +8,7 @@ from app.config import settings
 from app.data_store import HOSPITALS
 from app.database import SessionLocal
 from app.models import AmbulanceModel, HospitalModel, ICUBedModel, PatientRecordModel, TransferRequestModel, UserModel
+from app.time_utils import utcnow
 
 
 AMBULANCES_PER_HOSPITAL = 2
@@ -101,7 +101,7 @@ def init_db() -> None:
             user.username = user.username or user.id
             if development_password and not user.password_hash:
                 user.password_hash = hash_password(development_password)
-                user.password_changed_at = datetime.utcnow()
+                user.password_changed_at = utcnow()
         db.commit()
 
 
@@ -304,7 +304,7 @@ def _ensure_realistic_patient(db, hospital: HospitalModel, bed: ICUBedModel) -> 
     patient.next_of_kin = patient.next_of_kin or f"{name.split()[0]} family representative"
     patient.address = patient.address or f"Colombo District, Western Province"
     patient.notes = patient.notes or "Synthetic demonstration record for ICU workflow testing."
-    patient.updated_at = datetime.utcnow()
+    patient.updated_at = utcnow()
 
 
 def _sync_hospital_reference_data(db) -> None:
@@ -326,7 +326,7 @@ def _sync_hospital_reference_data(db) -> None:
         stored.supports_pediatric = hospital.supports_pediatric
         stored.supports_maternity = hospital.supports_maternity
         stored.has_ventilator_support = hospital.has_ventilator_support
-        stored.updated_at = datetime.utcnow()
+        stored.updated_at = utcnow()
 
 if __name__ == "__main__":
     init_db()

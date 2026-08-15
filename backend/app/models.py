@@ -6,6 +6,7 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Str
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.time_utils import utcnow
 
 
 class HospitalModel(Base):
@@ -26,7 +27,7 @@ class HospitalModel(Base):
     has_ventilator_support: Mapped[bool] = mapped_column(Boolean, default=True)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)
     address: Mapped[str | None] = mapped_column(String, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     users: Mapped[list["UserModel"]] = relationship(back_populates="hospital")
     icu_beds: Mapped[list["ICUBedModel"]] = relationship(back_populates="hospital")
@@ -68,8 +69,8 @@ class AuthSessionModel(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     refresh_token_hash: Mapped[str] = mapped_column(String, nullable=False)
     csrf_token_hash: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -85,7 +86,7 @@ class EventStreamTicketModel(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     token_hash: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -109,7 +110,7 @@ class AmbulanceModel(Base):
     route_progress_m: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     navigation_leg: Mapped[str | None] = mapped_column(String, nullable=True)
     telemetry_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ICUBedModel(Base):
@@ -128,7 +129,7 @@ class ICUBedModel(Base):
     fhir_location_id: Mapped[str | None] = mapped_column(String, nullable=True)
     operational_status: Mapped[str | None] = mapped_column(String, nullable=True)
     status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     hospital: Mapped[HospitalModel] = relationship(back_populates="icu_beds")
     patient: Mapped["PatientRecordModel | None"] = relationship(back_populates="bed", uselist=False)
@@ -165,8 +166,8 @@ class PatientRecordModel(Base):
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     transfer_id: Mapped[str | None] = mapped_column(ForeignKey("transfer_requests.id"), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    admitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    admitted_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     bed: Mapped[ICUBedModel] = relationship(back_populates="patient")
 
@@ -214,8 +215,8 @@ class TransferRequestModel(Base):
     pickup_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     dropoff_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     dropoff_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class TransferEventModel(Base):
@@ -232,7 +233,7 @@ class TransferEventModel(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str] = mapped_column(String, nullable=False)
     details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class BedLifecycleEventModel(Base):
@@ -254,7 +255,7 @@ class BedLifecycleEventModel(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     patient_id: Mapped[str | None] = mapped_column(ForeignKey("patient_records.id"), nullable=True)
     transfer_id: Mapped[str | None] = mapped_column(ForeignKey("transfer_requests.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AuditLogModel(Base):
@@ -269,5 +270,5 @@ class AuditLogModel(Base):
     action: Mapped[str] = mapped_column(String, nullable=False)
     entity_type: Mapped[str] = mapped_column(String, nullable=False)
     entity_id: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     details_json: Mapped[str | None] = mapped_column(Text, nullable=True)

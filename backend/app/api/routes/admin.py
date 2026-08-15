@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import asyncio
-from datetime import datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -56,6 +55,7 @@ from app.services.transfer_state_machine import (
     transition_transfer_atomic,
 )
 from app.services.urgency_service import UrgencyService
+from app.time_utils import utcnow
 
 router = APIRouter()
 
@@ -204,7 +204,7 @@ def sync_hospital_bed_counts(db: Session, hospital_id: str) -> None:
         .filter(ICUBedModel.hospital_id == hospital_id, ICUBedModel.status != "available")
         .count()
     )
-    hospital.updated_at = datetime.utcnow()
+    hospital.updated_at = utcnow()
 
 
 def record_bed_lifecycle_event(
@@ -279,7 +279,7 @@ def reserve_transfer_bed(db: Session, transfer: TransferRequestModel) -> ICUBedM
     patient.emergency_contact = transfer.patient_emergency_contact
     patient.transfer_id = transfer.id
     patient.notes = transfer.notes
-    patient.updated_at = datetime.utcnow()
+    patient.updated_at = utcnow()
     record_bed_lifecycle_event(
         db,
         bed,
@@ -464,7 +464,7 @@ def capacity_forecast(
     else:
         network_action = "Network capacity is stable. Continue normal risk-aware dispatch."
     return CapacityForecastSummary(
-        generated_at=datetime.utcnow().isoformat(),
+        generated_at=utcnow().isoformat(),
         network_pressure_level=network_level,
         network_pressure_score=network_score,
         network_recommended_action=network_action,
@@ -543,8 +543,8 @@ def stream_admin_events(
         }
 
     async def event_generator():
-        last_transfer_event_at = datetime.utcnow()
-        last_bed_event_at = datetime.utcnow()
+        last_transfer_event_at = utcnow()
+        last_bed_event_at = utcnow()
         yield "event: connected\ndata: {}\n\n"
         while True:
             emitted = False
@@ -665,7 +665,7 @@ def update_hospital(
         setattr(hospital, key, value)
     if hospital.occupied_beds > hospital.total_beds:
         raise HTTPException(status_code=422, detail="Occupied beds cannot exceed total beds")
-    hospital.updated_at = datetime.utcnow()
+    hospital.updated_at = utcnow()
     audit(db, user, "hospital_update", "hospital", hospital_id, changes)
     db.commit()
     db.refresh(hospital)
@@ -799,7 +799,7 @@ def update_icu_bed(
         patient.next_of_kin = request.next_of_kin if request.next_of_kin is not None else patient.next_of_kin
         patient.address = request.address if request.address is not None else patient.address
         patient.notes = request.notes if request.notes is not None else patient.notes
-        patient.updated_at = datetime.utcnow()
+        patient.updated_at = utcnow()
         bed.status = "occupied"
         bed.status_reason = request.status_reason or "Patient assigned to ICU bed."
     elif request.status:
@@ -809,7 +809,7 @@ def update_icu_bed(
             db.delete(bed.patient)
             patient_removed_this_request = True
 
-    bed.updated_at = datetime.utcnow()
+    bed.updated_at = utcnow()
     record_bed_lifecycle_event(
         db,
         bed,
@@ -856,7 +856,7 @@ def update_ambulance(
     changes = request.model_dump(exclude_unset=True)
     for key, value in changes.items():
         setattr(ambulance, key, value)
-    ambulance.updated_at = datetime.utcnow()
+    ambulance.updated_at = utcnow()
     audit(db, user, "ambulance_update", "ambulance", ambulance_id, changes)
     db.commit()
     db.refresh(ambulance)
@@ -976,7 +976,7 @@ def accept_transfer(
         raise HTTPException(status_code=404, detail="Transfer hospital not found")
     transition_transfer_atomic(db, transfer, TRANSFER_ACCEPTED_WAITING_AMBULANCE)
     transfer.notes = request.notes or transfer.notes
-    transfer.updated_at = datetime.utcnow()
+    transfer.updated_at = utcnow()
     reserved_bed = reserve_transfer_bed(db, transfer)
     sync_hospital_bed_counts(db, origin.id)
     add_transfer_event(
@@ -1082,7 +1082,7 @@ def reject_transfer(
         raise HTTPException(status_code=409, detail=f"Only pending requests can be rejected; current status is {transfer.status}")
     transition_transfer_atomic(db, transfer, TRANSFER_REJECTED)
     transfer.notes = request.notes or transfer.notes
-    transfer.updated_at = datetime.utcnow()
+    transfer.updated_at = utcnow()
     audit(db, user, "transfer_rejected", "transfer", transfer.id)
     add_transfer_event(
         db,
@@ -1111,7 +1111,7 @@ def assign_ambulance(
     dispatch = DispatchService().auto_assign(db, transfer)
     if not dispatch:
         raise HTTPException(status_code=409, detail="No available ambulance")
-    transfer.updated_at = datetime.utcnow()
+    transfer.updated_at = utcnow()
     audit(
         db,
         user,

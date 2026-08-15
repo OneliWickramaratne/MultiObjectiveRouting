@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 from getpass import getpass
 from pathlib import Path
 import sys
@@ -13,6 +12,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from app.auth import hash_password  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import AuthSessionModel, UserModel  # noqa: E402
+from app.time_utils import utcnow  # noqa: E402
 
 
 def main() -> None:
@@ -37,14 +37,14 @@ def main() -> None:
             raise SystemExit(f"User {args.username!r} was not found.")
         user.username = user.username or user.id
         user.password_hash = hash_password(first)
-        user.password_changed_at = datetime.utcnow()
+        user.password_changed_at = utcnow()
         user.failed_login_count = 0
         user.locked_until = None
         user.is_active = True
         db.query(AuthSessionModel).filter(
             AuthSessionModel.user_id == user.id,
             AuthSessionModel.revoked_at.is_(None),
-        ).update({AuthSessionModel.revoked_at: datetime.utcnow()}, synchronize_session=False)
+        ).update({AuthSessionModel.revoked_at: utcnow()}, synchronize_session=False)
         db.commit()
         print(f"Password updated for {user.username}; existing sessions were revoked.")
 

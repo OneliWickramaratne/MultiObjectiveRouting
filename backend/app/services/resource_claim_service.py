@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models import AmbulanceModel, ICUBedModel
+from app.time_utils import utcnow
 
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def claim_available_bed(
@@ -39,7 +36,7 @@ def claim_available_bed(
                 status="transfer_assigned",
                 operational_status="reserved",
                 status_reason="Reserved for accepted incoming transfer.",
-                updated_at=_utc_now(),
+                updated_at=utcnow(),
             ),
             execution_options={"synchronize_session": False},
         )
@@ -63,7 +60,7 @@ def claim_available_ambulance(
                 AmbulanceModel.id == ambulance_id,
                 AmbulanceModel.status == "available",
             )
-            .values(status="assigned", updated_at=_utc_now()),
+            .values(status="assigned", updated_at=utcnow()),
             execution_options={"synchronize_session": False},
         )
         if result.rowcount == 1:

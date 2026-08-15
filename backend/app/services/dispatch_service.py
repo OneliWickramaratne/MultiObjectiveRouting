@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +12,7 @@ from app.services.osm_graph_routing_service import OSMGraphRoute, osm_graph_rout
 from app.services.resource_claim_service import claim_available_ambulance
 from app.services.traffic_model_service import TrafficModelService
 from app.services.transfer_state_machine import TRANSFER_AMBULANCE_ASSIGNED, transition_transfer_atomic
+from app.time_utils import utcnow
 
 
 traffic_model_service = TrafficModelService()
@@ -262,7 +262,7 @@ class DispatchService:
     def _stale_location_penalty(ambulance: AmbulanceModel) -> float:
         if not ambulance.updated_at:
             return 0.35
-        age_minutes = max((datetime.utcnow() - ambulance.updated_at).total_seconds() / 60, 0)
+        age_minutes = max((utcnow() - ambulance.updated_at).total_seconds() / 60, 0)
         if age_minutes > 30:
             return 0.5
         if age_minutes > 10:

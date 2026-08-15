@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import AuthSessionModel, EventStreamTicketModel, UserModel
+from app.time_utils import utcnow
 
 
 REFRESH_COOKIE = "icu_refresh"
@@ -34,10 +35,6 @@ def verify_password(password: str, encoded_hash: str) -> bool:
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _utcnow() -> datetime:
-    return datetime.utcnow()
 
 
 def user_summary(user: UserModel) -> dict[str, str | None]:
@@ -75,7 +72,7 @@ def create_session(db: Session, user: UserModel, user_agent: str | None = None) 
     refresh_secret = secrets.token_urlsafe(48)
     csrf_token = secrets.token_urlsafe(32)
     refresh_token = f"{session_id}.{refresh_secret}"
-    now = _utcnow()
+    now = utcnow()
     session = AuthSessionModel(
         id=session_id,
         user_id=user.id,
@@ -96,7 +93,7 @@ def rotate_session_tokens(session: AuthSessionModel) -> tuple[str, str]:
     csrf_token = secrets.token_urlsafe(32)
     session.refresh_token_hash = _token_hash(refresh_token)
     session.csrf_token_hash = _token_hash(csrf_token)
-    session.last_used_at = _utcnow()
+    session.last_used_at = utcnow()
     return refresh_token, csrf_token
 
 
@@ -117,7 +114,7 @@ def validate_refresh_session(
         raise HTTPException(status_code=403, detail="CSRF validation failed")
     session_id = parse_refresh_session_id(refresh_token)
     session = db.get(AuthSessionModel, session_id) if session_id else None
-    now = _utcnow()
+    now = utcnow()
     if not session or session.revoked_at or session.expires_at <= now:
         raise _authentication_error()
     if not hmac.compare_digest(session.refresh_token_hash, _token_hash(refresh_token)):
@@ -150,7 +147,7 @@ def authenticate_access_token(db: Session, authorization: str | None) -> tuple[U
     if payload.get("type") != "access":
         raise _authentication_error()
     session = db.get(AuthSessionModel, str(payload["sid"]))
-    now = _utcnow()
+    now = utcnow()
     if not session or session.user_id != payload["sub"] or session.revoked_at or session.expires_at <= now:
         raise _authentication_error()
     user = db.get(UserModel, str(payload["sub"]))
@@ -170,7 +167,7 @@ def get_current_user(
 def create_event_stream_ticket(db: Session, user: UserModel) -> str:
     ticket_id = str(uuid4())
     ticket = f"{ticket_id}.{secrets.token_urlsafe(32)}"
-    now = _utcnow()
+    now = utcnow()
     db.add(
         EventStreamTicketModel(
             id=ticket_id,
@@ -187,7 +184,7 @@ def create_event_stream_ticket(db: Session, user: UserModel) -> str:
 def consume_event_stream_ticket(db: Session, ticket: str) -> UserModel:
     ticket_id, separator, _ = ticket.partition(".")
     row = db.get(EventStreamTicketModel, ticket_id) if separator else None
-    now = _utcnow()
+    now = utcnow()
     if (
         not row
         or row.used_at is not None

@@ -13,6 +13,7 @@ from app.database import SessionLocal
 from app.models import AmbulanceModel, HospitalModel, TransferRequestModel
 from app.services.osm_graph_routing_service import osm_graph_routing_service
 from app.services.route_motion_service import RouteTrack, haversine_m
+from app.time_utils import utcnow
 
 
 LOGGER = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ class FleetSimulationService:
         with SessionLocal() as db:
             active_by_ambulance = self._active_transfer_by_ambulance(db)
             hospitals = {hospital.id: hospital for hospital in db.query(HospitalModel).all()}
-            now = datetime.utcnow()
+            now = utcnow()
             for ambulance in db.query(AmbulanceModel).all():
                 transfer = active_by_ambulance.get(ambulance.id)
                 if transfer:
@@ -215,8 +216,8 @@ class FleetSimulationService:
         ambulance.speed_kph = 0.0
         ambulance.route_progress_m = 0.0
         ambulance.navigation_leg = None
-        ambulance.telemetry_updated_at = datetime.utcnow()
-        ambulance.updated_at = datetime.utcnow()
+        ambulance.telemetry_updated_at = utcnow()
+        ambulance.updated_at = utcnow()
         ambulance.status = "available"
         self._motion.pop(ambulance.id, None)
 

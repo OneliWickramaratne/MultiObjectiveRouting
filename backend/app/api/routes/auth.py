@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from sqlalchemy import func
@@ -23,6 +23,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import AuthSessionModel, UserModel
 from app.schemas import AuthTokenResponse, EventStreamTicketResponse, LoginRequest, UserSummary
+from app.time_utils import utcnow
 
 
 router = APIRouter()
@@ -73,7 +74,7 @@ def login(
 ) -> AuthTokenResponse:
     username = payload.username.strip().lower()
     user = db.query(UserModel).filter(func.lower(UserModel.username) == username).one_or_none()
-    now = datetime.utcnow()
+    now = utcnow()
     if not user:
         verify_password(payload.password, _dummy_password_hash)
         raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -122,7 +123,7 @@ def logout(
     if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:
         raise HTTPException(status_code=403, detail="CSRF validation failed")
     _, session = authenticate_access_token(db, authorization)
-    session.revoked_at = datetime.utcnow()
+    session.revoked_at = utcnow()
     db.commit()
     logout_response = Response(status_code=204)
     _clear_auth_cookies(logout_response)
