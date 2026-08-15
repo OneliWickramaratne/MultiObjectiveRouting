@@ -163,7 +163,5 @@ For local endpoint testing, see [docs/testing_guide.md](docs/testing_guide.md).
 - [Current architecture](docs/current_system_architecture.md)
 - [Architecture audit](docs/architecture_audit.md)
 - [Security threat model](docs/security_threat_model.md)
-- [Production optimization plan](docs/production_optimization_plan.md)
 - [Deployment guide](docs/deployment_guide.md)
-- [Operations runbook](docs/operations_runbook.md)
 - [Model documentation](docs/model_documentation.md)
