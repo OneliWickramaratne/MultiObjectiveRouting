@@ -1,0 +1,3648 @@
+import {
+  Activity,
+  AlertCircle,
+  Ambulance,
+  BarChart3,
+  Bed,
+  Bell,
+  Building2,
+  Check,
+  ChevronDown,
+  ExternalLink,
+  Hospital as HospitalIcon,
+  Loader2,
+  MapPin,
+  Navigation,
+  Route,
+  ShieldCheck,
+  Siren,
+  UserCog,
+  X,
+} from "lucide-react";
+import type { CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import "leaflet/dist/leaflet.css";
+import { divIcon, latLngBounds } from "leaflet";
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
+import "./styles.css";
+
+const API_BASE_CANDIDATES = Array.from(
+  new Set([
+    "http://127.0.0.1:8001",
+    "http://127.0.0.1:8000",
+  ].filter(Boolean) as string[]),
+);
+let activeApiBase = API_BASE_CANDIDATES[0];
+let accessToken: string | null = null;
+let refreshPromise: Promise<AuthTokenResponse | null> | null = null;
+let authenticationFailed = () => {};
+
+function cookieValue(name: string) {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const item = document.cookie.split("; ").find((cookie) => cookie.startsWith(prefix));
+  return item ? decodeURIComponent(item.slice(prefix.length)) : null;
+}
+
+async function refreshAccessToken(): Promise<AuthTokenResponse | null> {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
+  refreshPromise = (async () => {
+    const csrfToken = cookieValue("icu_csrf");
+    if (!csrfToken) {
+      return null;
+    }
+    for (const base of [activeApiBase, ...API_BASE_CANDIDATES.filter((item) => item !== activeApiBase)]) {
+      try {
+        const response = await fetch(`${base}/api/auth/refresh`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "X-CSRF-Token": csrfToken },
+        });
+        if (!response.ok) {
+          continue;
+        }
+        const payload: AuthTokenResponse = await response.json();
+        accessToken = payload.access_token;
+        activeApiBase = base;
+        return payload;
+      } catch {
+        // Try the next configured local backend.
+      }
+    }
+    accessToken = null;
+    return null;
+  })().finally(() => {
+    refreshPromise = null;
+  });
+  return refreshPromise;
+}
+
+async function apiFetch(path: string, init?: RequestInit, allowRefresh = true): Promise<Response> {
+  let lastError: unknown;
+  const orderedBases = [activeApiBase, ...API_BASE_CANDIDATES.filter((base) => base !== activeApiBase)];
+  for (const base of orderedBases) {
+    try {
+      const headers = new Headers(init?.headers);
+      if (accessToken) {
+        headers.set("Authorization", `Bearer ${accessToken}`);
+      }
+      const response = await fetch(`${base}${path}`, {
+        ...init,
+        credentials: "include",
+        headers,
+      });
+      activeApiBase = base;
+      const refreshEligible = path !== "/api/auth/login" && path !== "/api/auth/refresh";
+      if (response.status === 401 && allowRefresh && refreshEligible) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          return apiFetch(path, init, false);
+        }
+        authenticationFailed();
+      }
+      return response;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+const BACKEND_OFFLINE_MESSAGE = "Backend is offline. Start the app with START_APP.cmd; reconnecting automatically...";
+const ThreeDNavigationMap = lazy(() =>
+  import("./components/ThreeDNavigationMap").then((module) => ({
+    default: module.ThreeDNavigationMap,
+  })),
+);
+
+type Hospital = {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  icu_types: string[];
+  total_beds: number;
+  occupied_beds: number;
+  available_beds: number;
+  supports_trauma: boolean;
+  supports_cardiac: boolean;
+  supports_neuro: boolean;
+  supports_pediatric: boolean;
+  supports_maternity: boolean;
+};
+
+type AuthTokenResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  user: UserSummary;
+};
+
+type PatientRecord = {
+  id: string;
+  patient_no: string;
+  patient_name: string;
+  identifier_system: string | null;
+  identifier_value: string | null;
+  date_of_birth: string | null;
+  age: number | null;
+  sex: string | null;
+  blood_type: string | null;
+  condition: string;
+  diagnosis: string | null;
+  vitals: Record<string, unknown> | null;
+  medications: string[];
+  allergies: string | null;
+  infection_risk: string | null;
+  isolation_required: boolean;
+  emergency_contact: string | null;
+  next_of_kin: string | null;
+  address: string | null;
+  transfer_id: string | null;
+  notes: string | null;
+  admitted_at: string;
+  updated_at: string;
+};
+
+type IcuBed = {
+  id: string;
+  hospital_id: string;
+  bed_no: string;
+  icu_type: string;
+  ward: string;
+  status: string;
+  fhir_location_id: string | null;
+  operational_status: string | null;
+  status_reason: string | null;
+  patient: PatientRecord | null;
+  updated_at: string;
+};
+
+type Recommendation = {
+  destination_hospital_id: string;
+  destination_name: string;
+  rank: number;
+  score: number;
+  available_beds: number;
+  estimated_minutes: number;
+  route_risk_score: number;
+  reasons: string[];
+};
+
+type TransferResponse = {
+  urgency_class: string;
+  urgency_score: number;
+  recommendations: Recommendation[];
+};
+
+type RouteOption = {
+  strategy: string;
+  estimated_minutes: number;
+  distance_km: number;
+  risk_score: number;
+  total_cost: number;
+  congestion_ratio: number | null;
+  model_used: string | null;
+  route_source: string | null;
+  route_nodes: string[];
+  route_steps: RouteStep[];
+  risk_features: Record<string, unknown>;
+  risk_factors: string[];
+  explanation: string[];
+  polyline: [number, number][];
+};
+
+type RouteResponse = {
+  routes: RouteOption[];
+};
+
+type AmbulanceSummary = {
+  id: string;
+  call_sign: string;
+  base_hospital_id: string | null;
+  status: string;
+  latitude: number;
+  longitude: number;
+  heading_degrees: number;
+  speed_kph: number;
+  route_progress_m: number;
+  navigation_leg: string | null;
+  telemetry_updated_at: string | null;
+};
+
+type TransferSummary = {
+  id: string;
+  origin_hospital_id: string;
+  destination_hospital_id: string;
+  status: string;
+  patient_name: string | null;
+  patient_age: number | null;
+  patient_sex: string | null;
+  patient_blood_type: string | null;
+  patient_allergies: string | null;
+  patient_emergency_contact: string | null;
+  patient_identifier_value: string | null;
+  patient_date_of_birth: string | null;
+  patient_diagnosis: string | null;
+  patient_vitals: Record<string, unknown> | null;
+  patient_medications: string[];
+  patient_infection_risk: string | null;
+  patient_isolation_required: boolean;
+  handover: Record<string, unknown> | null;
+  patient_condition: string;
+  required_icu_type: string;
+  urgency_class: string;
+  urgency_score: number;
+  ambulance_id: string | null;
+  notes: string | null;
+  route_payload_json?: string | null;
+  assigned_bed_id?: string | null;
+  pickup_latitude?: number | null;
+  pickup_longitude?: number | null;
+  dropoff_latitude?: number | null;
+  dropoff_longitude?: number | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type TransferEventSummary = {
+  id: string;
+  transfer_id: string;
+  actor_user_id: string | null;
+  event_type: string;
+  status: string;
+  message: string;
+  details_json: string | null;
+  created_at: string;
+};
+
+type DispatchPayload = {
+  model?: string;
+  score?: number;
+  estimated_pickup_minutes?: number;
+  distance_to_pickup_km?: number;
+  pickup_risk_score?: number;
+  coverage_penalty?: number;
+  explanation?: string[];
+  candidate_rankings?: Array<{
+    ambulance_id: string;
+    call_sign: string;
+    score: number;
+    estimated_pickup_minutes: number;
+    pickup_risk_score: number;
+    coverage_penalty: number;
+    reasons: string[];
+  }>;
+};
+
+type DashboardSummary = {
+  hospitals: Hospital[];
+  ambulances: AmbulanceSummary[];
+  transfers: TransferSummary[];
+};
+
+type CapacityForecastPoint = {
+  horizon_hours: number;
+  predicted_available_beds: number;
+  predicted_occupied_beds: number;
+  pressure_score: number;
+  pressure_level: string;
+};
+
+type HospitalCapacityForecast = {
+  hospital_id: string;
+  hospital_name: string;
+  total_beds: number;
+  current_available_beds: number;
+  current_occupied_beds: number;
+  inbound_transfers: number;
+  expected_discharges_12h: number;
+  expected_cleaning_recoveries_12h: number;
+  points: CapacityForecastPoint[];
+  recommended_action: string;
+};
+
+type CapacityForecastSummary = {
+  generated_at: string;
+  network_pressure_level: string;
+  network_pressure_score: number;
+  network_recommended_action: string;
+  hospitals: HospitalCapacityForecast[];
+};
+
+type SimulationHospitalImpact = {
+  hospital_id: string;
+  hospital_name: string;
+  current_available_beds: number;
+  projected_arrivals: number;
+  projected_releases: number;
+  predicted_available_beds: number;
+  shortage_beds: number;
+  pressure_score: number;
+  pressure_level: string;
+  recommended_action: string;
+};
+
+type SimulationAnalyticsSummary = {
+  generated_at: string;
+  scenario: string;
+  scenario_label: string;
+  description: string;
+  duration_hours: number;
+  intensity: number;
+  simulated_transfers: number;
+  critical_transfers: number;
+  ambulances_required: number;
+  available_ambulances: number;
+  ambulance_gap: number;
+  total_available_beds: number;
+  total_beds: number;
+  shortage_hospitals: number;
+  total_shortage_beds: number;
+  network_pressure_level: string;
+  network_pressure_score: number;
+  recommended_action: string;
+  hospital_impacts: SimulationHospitalImpact[];
+};
+
+type AmbulanceMission = {
+  ambulance: AmbulanceSummary;
+  active_transfer: TransferSummary | null;
+  return_route_json?: string | null;
+};
+
+type MissionRoutePayload = {
+  source?: string;
+  strategy?: string;
+  distance_km?: number;
+  estimated_minutes?: number;
+  risk_score?: number | null;
+  route_nodes?: string[];
+  route_steps?: RouteStep[];
+  risk_features?: Record<string, unknown>;
+  risk_factors?: string[];
+  explanation?: string[];
+  polyline?: [number, number][];
+};
+
+type RouteStep = {
+  start_index: number;
+  end_index: number;
+  road_name: string;
+  maneuver: "depart" | "continue" | "left" | "right" | "sharp_left" | "sharp_right" | string;
+  distance_meters: number;
+  estimated_seconds?: number;
+  average_risk?: number | null;
+  instruction?: string;
+};
+
+type UserSummary = {
+  id: string;
+  name: string;
+  role: string;
+  hospital_id: string | null;
+  ambulance_id: string | null;
+};
+
+type BlockingModal = {
+  title: string;
+  message: string;
+  tone?: "info" | "warning" | "success";
+  confirmLabel: string;
+  cancelLabel?: string;
+  onConfirm?: () => void | Promise<void>;
+  onCancel?: () => void;
+};
+
+type MapCommandView = "live" | "fleet" | "capacity" | "beds" | "transfers" | "analytics" | "alerts";
+type ConsoleTab = "overview" | "transfer" | "requests" | "fleet";
+
+const conditionOptions = ["trauma", "respiratory", "cardiac", "neuro", "pediatric", "maternity", "sepsis"];
+const oxygenOptions = ["normal", "low", "critical"];
+const bloodPressureOptions = ["stable", "unstable", "shock"];
+const consciousnessOptions = ["alert", "reduced", "unconscious"];
+const icuOptions = ["General ICU", "Pediatric ICU", "Maternity ICU"];
+const simulationScenarioOptions = [
+  { id: "baseline", label: "Baseline" },
+  { id: "evening_surge", label: "Evening surge" },
+  { id: "mass_casualty", label: "Mass casualty" },
+  { id: "respiratory_wave", label: "Respiratory wave" },
+];
+const ambulanceStatusOptions = ["available", "repositioning", "returning", "assigned", "en_route", "transporting", "offline"];
+const icuBedStatusOptions = ["available", "occupied", "transfer_assigned", "reserved", "cleaning", "maintenance"];
+const hospitalMarkerColors = ["#1556b0", "#0b7a75", "#a85520", "#7c3aed", "#c2410c", "#be123c", "#047857", "#4338ca", "#b45309"];
+const ambulanceMarkerColors = ["#e11d48", "#2563eb", "#059669", "#d97706", "#7c3aed", "#0f766e", "#c026d3", "#ca8a04", "#0284c7", "#dc2626"];
+
+function stableColor(value: string, palette: string[]) {
+  const numeric = value.split("").reduce((total, character) => total + character.charCodeAt(0), 0);
+  return palette[numeric % palette.length];
+}
+
+function hospitalCode(name: string) {
+  const words = name.replace(/Sri Lanka|Hospital|Teaching|General|Central|for Women/gi, "").trim().split(/\s+/);
+  return (
+    words
+      .slice(0, 3)
+      .map((word) => word[0])
+      .join("")
+      .toUpperCase() || "H"
+  );
+}
+
+function bearingDirection(from: [number, number], to: [number, number]) {
+  const y = Math.sin((to[1] - from[1]) * Math.PI / 180) * Math.cos(to[0] * Math.PI / 180);
+  const x =
+    Math.cos(from[0] * Math.PI / 180) * Math.sin(to[0] * Math.PI / 180)
+    - Math.sin(from[0] * Math.PI / 180)
+      * Math.cos(to[0] * Math.PI / 180)
+      * Math.cos((to[1] - from[1]) * Math.PI / 180);
+  const bearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return labels[Math.round(bearing / 45) % labels.length];
+}
+
+function bearingDegrees(from: [number, number], to: [number, number]) {
+  const y = Math.sin((to[1] - from[1]) * Math.PI / 180) * Math.cos(to[0] * Math.PI / 180);
+  const x =
+    Math.cos(from[0] * Math.PI / 180) * Math.sin(to[0] * Math.PI / 180)
+    - Math.sin(from[0] * Math.PI / 180)
+      * Math.cos(to[0] * Math.PI / 180)
+      * Math.cos((to[1] - from[1]) * Math.PI / 180);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+function haversineMeters(first: [number, number], second: [number, number]) {
+  const radius = 6371000;
+  const lat1 = first[0] * Math.PI / 180;
+  const lat2 = second[0] * Math.PI / 180;
+  const deltaLat = (second[0] - first[0]) * Math.PI / 180;
+  const deltaLng = (second[1] - first[1]) * Math.PI / 180;
+  const value =
+    Math.sin(deltaLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
+  return radius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+function routeDistanceMeters(points: [number, number][], startIndex: number, endIndex: number) {
+  let distance = 0;
+  const boundedStart = Math.max(0, Math.min(startIndex, points.length - 1));
+  const boundedEnd = Math.max(boundedStart, Math.min(endIndex, points.length - 1));
+  for (let index = boundedStart; index < boundedEnd; index += 1) {
+    distance += haversineMeters(points[index], points[index + 1]);
+  }
+  return distance;
+}
+
+function formatNavigationDistance(meters: number) {
+  if (meters >= 950) {
+    return `${(meters / 1000).toFixed(1)} km`;
+  }
+  return `${Math.max(20, Math.round(meters / 10) * 10)} m`;
+}
+
+function formatManeuver(maneuver: string) {
+  if (maneuver === "left") {
+    return "Turn left";
+  }
+  if (maneuver === "right") {
+    return "Turn right";
+  }
+  if (maneuver === "sharp_left") {
+    return "Make a sharp left";
+  }
+  if (maneuver === "sharp_right") {
+    return "Make a sharp right";
+  }
+  if (maneuver === "depart") {
+    return "Start driving";
+  }
+  return "Continue";
+}
+
+function turnFromBearings(previous: number, next: number) {
+  const delta = ((next - previous + 540) % 360) - 180;
+  if (delta <= -125) {
+    return "sharp_left";
+  }
+  if (delta < -35) {
+    return "left";
+  }
+  if (delta >= 125) {
+    return "sharp_right";
+  }
+  if (delta > 35) {
+    return "right";
+  }
+  return "continue";
+}
+
+function nearestRouteIndex(points: [number, number][], latitude: number, longitude: number) {
+  return points.reduce((bestIndex, point, index) => {
+    const bestPoint = points[bestIndex] ?? point;
+    const distance = haversineMeters(point, [latitude, longitude]);
+    const bestDistance = haversineMeters(bestPoint, [latitude, longitude]);
+    return distance < bestDistance ? index : bestIndex;
+  }, 0);
+}
+
+function ambulanceMarkerIcon(ambulance: AmbulanceSummary) {
+  const color = stableColor(ambulance.base_hospital_id ?? ambulance.id, hospitalMarkerColors);
+  const statusClass = ambulance.status.replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+  const label = ambulance.base_hospital_id ? `H${ambulance.base_hospital_id}` : "AMB";
+  return divIcon({
+    className: "ambulance-leaflet-icon",
+    html: `
+      <div class="ambulance-pin ${statusClass}" style="--marker-color: ${color}">
+        <span class="ambulance-cab"></span>
+        <span class="ambulance-body"></span>
+        <span class="ambulance-cross">+</span>
+        <span class="ambulance-label">${label}</span>
+      </div>
+    `,
+    iconAnchor: [15, 13],
+    iconSize: [30, 26],
+    popupAnchor: [0, -13],
+  });
+}
+
+function MapNavigationController({
+  ambulance,
+  route,
+  driverMode,
+  focusKey,
+}: {
+  ambulance?: AmbulanceSummary | null;
+  route?: MissionRoutePayload | null;
+  driverMode: boolean;
+  focusKey: string;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!route?.polyline?.length) {
+      return;
+    }
+    const routeBounds = latLngBounds(route.polyline);
+    map.fitBounds(routeBounds, {
+      animate: true,
+      duration: 0.8,
+      maxZoom: driverMode ? 17 : 15,
+      padding: driverMode ? [70, 70] : [40, 40],
+    });
+    if (driverMode && ambulance) {
+      window.setTimeout(() => {
+        map.flyTo([ambulance.latitude, ambulance.longitude], 17, {
+          animate: true,
+          duration: 0.9,
+        });
+      }, 350);
+    }
+  }, [ambulance?.id, ambulance?.latitude, ambulance?.longitude, driverMode, focusKey, map, route?.polyline]);
+
+  return null;
+}
+
+function App() {
+  const [hospitals, setHospitals] = useState<Hospital[]>([]);
+  const [users, setUsers] = useState<UserSummary[]>([]);
+  const [originId, setOriginId] = useState("1");
+  const [requiredIcu, setRequiredIcu] = useState("General ICU");
+  const [conditionType, setConditionType] = useState("trauma");
+  const [oxygen, setOxygen] = useState("low");
+  const [bloodPressure, setBloodPressure] = useState("unstable");
+  const [consciousness, setConsciousness] = useState("reduced");
+  const [ventilatorRequired, setVentilatorRequired] = useState(true);
+  const [transferPatientName, setTransferPatientName] = useState("");
+  const [transferPatientIdentifier, setTransferPatientIdentifier] = useState("");
+  const [transferPatientAge, setTransferPatientAge] = useState("");
+  const [transferPatientDob, setTransferPatientDob] = useState("");
+  const [transferPatientSex, setTransferPatientSex] = useState("unknown");
+  const [transferPatientBloodType, setTransferPatientBloodType] = useState("");
+  const [transferPatientAllergies, setTransferPatientAllergies] = useState("");
+  const [transferPatientContact, setTransferPatientContact] = useState("");
+  const [transferPatientDiagnosis, setTransferPatientDiagnosis] = useState("");
+  const [transferPatientVitals, setTransferPatientVitals] = useState("");
+  const [transferPatientMedications, setTransferPatientMedications] = useState("");
+  const [transferPatientInfectionRisk, setTransferPatientInfectionRisk] = useState("none");
+  const [transferPatientIsolation, setTransferPatientIsolation] = useState(false);
+  const [recommendationData, setRecommendationData] = useState<TransferResponse | null>(null);
+  const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(null);
+  const [routes, setRoutes] = useState<RouteOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [activeUserId, setActiveUserId] = useState("super-admin");
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [dashboardData, setDashboardData] = useState<DashboardSummary | null>(null);
+  const [capacityForecast, setCapacityForecast] = useState<CapacityForecastSummary | null>(null);
+  const [simulationData, setSimulationData] = useState<SimulationAnalyticsSummary | null>(null);
+  const [simulationScenario, setSimulationScenario] = useState("evening_surge");
+  const [simulationHours, setSimulationHours] = useState("6");
+  const [simulationIntensity, setSimulationIntensity] = useState("1");
+  const [simulationLoading, setSimulationLoading] = useState(false);
+  const [missionData, setMissionData] = useState<AmbulanceMission | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [originPickerOpen, setOriginPickerOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [blockingModal, setBlockingModal] = useState<BlockingModal | null>(null);
+  const [selectedTransferDetail, setSelectedTransferDetail] = useState<TransferSummary | null>(null);
+  const [transferEvents, setTransferEvents] = useState<TransferEventSummary[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [backendOnline, setBackendOnline] = useState(false);
+  const [mapCommandView, setMapCommandView] = useState<MapCommandView>("live");
+  const [consoleTab, setConsoleTab] = useState<ConsoleTab>("overview");
+  const [telemetryConnected, setTelemetryConnected] = useState(false);
+  const [bedViewHospitalId, setBedViewHospitalId] = useState("1");
+  const [icuBeds, setIcuBeds] = useState<IcuBed[]>([]);
+  const [icuCensusBeds, setIcuCensusBeds] = useState<IcuBed[]>([]);
+  const [selectedBedId, setSelectedBedId] = useState<string | null>(null);
+  const [bedPatientNo, setBedPatientNo] = useState("");
+  const [bedPatientName, setBedPatientName] = useState("");
+  const [bedPatientIdentifier, setBedPatientIdentifier] = useState("");
+  const [bedPatientDob, setBedPatientDob] = useState("");
+  const [bedPatientAge, setBedPatientAge] = useState("");
+  const [bedPatientSex, setBedPatientSex] = useState("");
+  const [bedPatientBloodType, setBedPatientBloodType] = useState("");
+  const [bedPatientCondition, setBedPatientCondition] = useState("");
+  const [bedPatientDiagnosis, setBedPatientDiagnosis] = useState("");
+  const [bedPatientVitals, setBedPatientVitals] = useState("");
+  const [bedPatientMedications, setBedPatientMedications] = useState("");
+  const [bedPatientAllergies, setBedPatientAllergies] = useState("");
+  const [bedPatientInfectionRisk, setBedPatientInfectionRisk] = useState("");
+  const [bedPatientIsolation, setBedPatientIsolation] = useState(false);
+  const [bedPatientContact, setBedPatientContact] = useState("");
+  const [bedPatientNextOfKin, setBedPatientNextOfKin] = useState("");
+  const [bedPatientAddress, setBedPatientAddress] = useState("");
+  const [bedPatientNotes, setBedPatientNotes] = useState("");
+  const [bedStatus, setBedStatus] = useState("available");
+  const [bedEditorDirty, setBedEditorDirty] = useState(false);
+  const [highlightedTransferId, setHighlightedTransferId] = useState<string | null>(null);
+  const seenTransfersByUserRef = useRef<Record<string, Set<string>>>({});
+  const transferStatusByUserRef = useRef<Record<string, Map<string, string>>>({});
+  const transferAmbulanceByUserRef = useRef<Record<string, Map<string, string | null>>>({});
+  const bootstrapReadyRef = useRef(false);
+  const missionStatusRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    missionStatusRef.current = missionData?.active_transfer?.status ?? null;
+  }, [missionData?.active_transfer?.status]);
+
+  useEffect(() => {
+    void bootstrapApplication();
+    const interval = window.setInterval(() => {
+      if (!bootstrapReadyRef.current) {
+        void loadInitialData(true);
+      }
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    authenticationFailed = () => {
+      accessToken = null;
+      setIsSignedIn(false);
+      setUsers([]);
+      setDashboardData(null);
+      setMissionData(null);
+      setLoginError("Your session expired. Sign in again.");
+    };
+    return () => {
+      authenticationFailed = () => {};
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSignedIn) {
+      return;
+    }
+    const selectedUser = users.find((user) => user.id === activeUserId);
+    if (selectedUser?.hospital_id) {
+      setOriginId(selectedUser.hospital_id);
+      setBedViewHospitalId(selectedUser.hospital_id);
+    }
+    if (activeUserId.startsWith("ambulance-")) {
+      void loadMission();
+    } else {
+      setMissionData(null);
+      void loadDashboard();
+    }
+  }, [activeUserId, isSignedIn]);
+
+  useEffect(() => {
+    if (!isSignedIn) {
+      return;
+    }
+    if (activeUserId.startsWith("ambulance-")) {
+      const interval = window.setInterval(() => {
+        void loadMission(true);
+      }, 5000);
+      return () => window.clearInterval(interval);
+    }
+    const interval = window.setInterval(() => {
+      void loadDashboard(true);
+    }, 2000);
+    return () => window.clearInterval(interval);
+  }, [activeUserId, bedViewHospitalId, isSignedIn]);
+
+  useEffect(() => {
+    if (!isSignedIn || !activeUserId.startsWith("ambulance-")) {
+      setTelemetryConnected(false);
+      return;
+    }
+    let disposed = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    const connect = async () => {
+      try {
+        const ticketResponse = await apiFetch("/api/auth/event-stream-ticket", { method: "POST" });
+        if (!ticketResponse.ok || disposed) {
+          return;
+        }
+        const { ticket } = await ticketResponse.json() as { ticket: string };
+        const websocketBase = activeApiBase.replace(/^http/, "ws");
+        socket = new WebSocket(`${websocketBase}/api/ambulance/telemetry?ticket=${encodeURIComponent(ticket)}`);
+        socket.onopen = () => setTelemetryConnected(true);
+        socket.onmessage = (event) => {
+          const payload = JSON.parse(event.data) as {
+            kind: string;
+            ambulance: AmbulanceSummary;
+            active_transfer_id: string | null;
+            active_transfer_status: string | null;
+          };
+          if (payload.kind !== "ambulance_telemetry") {
+            return;
+          }
+          setMissionData((current) => current ? { ...current, ambulance: payload.ambulance } : current);
+          if (
+            payload.active_transfer_status
+            && payload.active_transfer_status !== missionStatusRef.current
+          ) {
+            void loadMission(true);
+          }
+        };
+        socket.onerror = () => socket?.close();
+        socket.onclose = () => {
+          setTelemetryConnected(false);
+          if (!disposed) {
+            reconnectTimer = window.setTimeout(connect, 1500);
+          }
+        };
+      } catch {
+        setTelemetryConnected(false);
+        if (!disposed) {
+          reconnectTimer = window.setTimeout(connect, 2000);
+        }
+      }
+    };
+    void connect();
+    return () => {
+      disposed = true;
+      if (reconnectTimer != null) {
+        window.clearTimeout(reconnectTimer);
+      }
+      socket?.close();
+      setTelemetryConnected(false);
+    };
+  }, [activeUserId, isSignedIn]);
+
+  useEffect(() => {
+    if (!isSignedIn || activeUserId.startsWith("ambulance-") || mapCommandView !== "analytics" || simulationData) {
+      return;
+    }
+    void runSimulation(true);
+  }, [activeUserId, isSignedIn, mapCommandView, simulationData]);
+
+  useEffect(() => {
+    if (!isSignedIn) {
+      return;
+    }
+    let source: EventSource | null = null;
+    let disposed = false;
+    const refreshFromEvent = () => {
+      if (activeUserId.startsWith("ambulance-")) {
+        void loadMission(true);
+      } else {
+        void loadDashboard(true);
+      }
+    };
+    const connect = async () => {
+      const response = await apiFetch("/api/auth/event-stream-ticket", { method: "POST" });
+      if (!response.ok || disposed) {
+        return;
+      }
+      const payload: { ticket: string } = await response.json();
+      source = new EventSource(
+        `${activeApiBase}/api/admin/events/stream?ticket=${encodeURIComponent(payload.ticket)}`,
+      );
+      source.addEventListener("transfer_event", refreshFromEvent);
+      source.addEventListener("bed_lifecycle_event", refreshFromEvent);
+      source.onerror = () => source?.close();
+    };
+    void connect();
+    return () => {
+      disposed = true;
+      source?.close();
+    };
+  }, [activeUserId, isSignedIn]);
+
+  useEffect(() => {
+    if (!isSignedIn) {
+      setIcuBeds([]);
+      setIcuCensusBeds([]);
+      return;
+    }
+    const selectedUser = users.find((user) => user.id === activeUserId);
+    const hospitalId = selectedUser?.hospital_id ?? (activeUserId === "super-admin" ? bedViewHospitalId : null);
+    if (!hospitalId || activeUserId.startsWith("ambulance-")) {
+      setIcuBeds([]);
+      setSelectedBedId(null);
+      return;
+    }
+    void loadIcuBeds(hospitalId);
+  }, [activeUserId, bedViewHospitalId, isSignedIn, users]);
+
+  useEffect(() => {
+    if (!isSignedIn || activeUserId.startsWith("ambulance-")) {
+      setIcuCensusBeds([]);
+      return;
+    }
+    void loadIcuCensus();
+  }, [activeUserId, isSignedIn]);
+
+  useEffect(() => {
+    const selectedBed = icuBeds.find((bed) => bed.id === selectedBedId);
+    if (bedEditorDirty && selectedBed) {
+      return;
+    }
+    if (!selectedBed) {
+      setBedStatus("available");
+      setBedPatientNo("");
+      setBedPatientName("");
+      setBedPatientIdentifier("");
+      setBedPatientDob("");
+      setBedPatientAge("");
+      setBedPatientSex("");
+      setBedPatientBloodType("");
+      setBedPatientCondition("");
+      setBedPatientDiagnosis("");
+      setBedPatientVitals("");
+      setBedPatientMedications("");
+      setBedPatientAllergies("");
+      setBedPatientInfectionRisk("");
+      setBedPatientIsolation(false);
+      setBedPatientContact("");
+      setBedPatientNextOfKin("");
+      setBedPatientAddress("");
+      setBedPatientNotes("");
+      return;
+    }
+    setBedStatus(selectedBed.status);
+    setBedPatientNo(selectedBed.patient?.patient_no ?? `PAT-${selectedBed.bed_no}`);
+    setBedPatientName(selectedBed.patient?.patient_name ?? "");
+    setBedPatientIdentifier(selectedBed.patient?.identifier_value ?? "");
+    setBedPatientDob(selectedBed.patient?.date_of_birth ?? "");
+    setBedPatientAge(selectedBed.patient?.age != null ? String(selectedBed.patient.age) : "");
+    setBedPatientSex(selectedBed.patient?.sex ?? "");
+    setBedPatientBloodType(selectedBed.patient?.blood_type ?? "");
+    setBedPatientCondition(selectedBed.patient?.condition ?? "");
+    setBedPatientDiagnosis(selectedBed.patient?.diagnosis ?? "");
+    setBedPatientVitals(formatVitals(selectedBed.patient?.vitals));
+    setBedPatientMedications(selectedBed.patient?.medications?.join(", ") ?? "");
+    setBedPatientAllergies(selectedBed.patient?.allergies ?? "");
+    setBedPatientInfectionRisk(selectedBed.patient?.infection_risk ?? "");
+    setBedPatientIsolation(Boolean(selectedBed.patient?.isolation_required));
+    setBedPatientContact(selectedBed.patient?.emergency_contact ?? "");
+    setBedPatientNextOfKin(selectedBed.patient?.next_of_kin ?? "");
+    setBedPatientAddress(selectedBed.patient?.address ?? "");
+    setBedPatientNotes(selectedBed.patient?.notes ?? "");
+  }, [icuBeds, selectedBedId, bedEditorDirty]);
+
+  async function bootstrapApplication() {
+    await loadInitialData();
+    const restored = await refreshAccessToken();
+    if (restored) {
+      applyAuthenticatedUser(restored.user);
+    }
+  }
+
+  function applyAuthenticatedUser(user: UserSummary) {
+    setUsers([user]);
+    setActiveUserId(user.id);
+    if (user.hospital_id) {
+      setOriginId(user.hospital_id);
+      setBedViewHospitalId(user.hospital_id);
+    }
+    setIsSignedIn(true);
+    setLoginError(null);
+  }
+
+  async function loadInitialData(silent = false) {
+    try {
+      const hospitalsResponse = await apiFetch("/api/hospitals");
+      if (!hospitalsResponse.ok) {
+        throw new Error("Unable to load hospitals");
+      }
+      const hospitalData: Hospital[] = await hospitalsResponse.json();
+      setHospitals(hospitalData);
+      if (hospitalData.length > 0) {
+        setOriginId((current) => hospitalData.some((hospital) => hospital.id === current) ? current : hospitalData[0].id);
+        setBedViewHospitalId((current) => hospitalData.some((hospital) => hospital.id === current) ? current : hospitalData[0].id);
+      }
+      bootstrapReadyRef.current = true;
+      setBackendOnline(true);
+      setError((current) => current === BACKEND_OFFLINE_MESSAGE ? null : current);
+    } catch (err) {
+      setBackendOnline(false);
+      if (!silent || hospitals.length === 0) {
+        setError(BACKEND_OFFLINE_MESSAGE);
+      }
+    }
+  }
+
+  const originHospital = useMemo(
+    () => hospitals.find((hospital) => hospital.id === originId) ?? hospitals[0],
+    [hospitals, originId],
+  );
+
+  const selectedDestination = useMemo(
+    () => hospitals.find((hospital) => hospital.id === selectedDestinationId),
+    [hospitals, selectedDestinationId],
+  );
+
+  const activeRoute = useMemo(
+    () => routes.find((route) => route.strategy === "ml_traffic_risk_aware") ?? routes[0],
+    [routes],
+  );
+
+  const routeLine = activeRoute?.polyline?.length
+    ? activeRoute.polyline
+    : originHospital && selectedDestination
+      ? [
+          [originHospital.latitude, originHospital.longitude] as [number, number],
+          [selectedDestination.latitude, selectedDestination.longitude] as [number, number],
+        ]
+      : [];
+
+  async function recommendTransfer() {
+    setLoading(true);
+    setError(null);
+    setRoutes([]);
+    try {
+      const response = await apiFetch("/api/transfers/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin_hospital_id: originId,
+          required_icu_type: requiredIcu,
+          patient_condition: {
+            condition_type: conditionType,
+            oxygen_saturation_band: oxygen,
+            blood_pressure_band: bloodPressure,
+            consciousness_level: consciousness,
+            ventilator_required: ventilatorRequired,
+          },
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Recommendation request failed");
+      }
+      const data: TransferResponse = await response.json();
+      setBackendOnline(true);
+      setRecommendationData(data);
+      const first = data.recommendations[0];
+      setSelectedDestinationId(first?.destination_hospital_id ?? null);
+      if (first) {
+        void loadRoute(first.destination_hospital_id, data.urgency_class);
+      }
+    } catch (err) {
+      if (err instanceof TypeError) {
+        setBackendOnline(false);
+        setError(BACKEND_OFFLINE_MESSAGE);
+      } else {
+        setError(err instanceof Error ? err.message : "Unexpected recommendation error");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadDashboard(silent = false) {
+    if (!silent) {
+      setDashboardLoading(true);
+    }
+    setError(null);
+    try {
+      const response = await apiFetch("/api/admin/dashboard");
+      if (!response.ok) {
+        throw new Error("Dashboard request failed");
+      }
+      const data: DashboardSummary = await response.json();
+      setBackendOnline(true);
+      setError((current) => current === BACKEND_OFFLINE_MESSAGE ? null : current);
+      setDashboardData(data);
+      processDashboardNotifications(data);
+      const selectedUser = users.find((user) => user.id === activeUserId);
+      const visibleHospitalId = selectedUser?.hospital_id ?? (activeUserId === "super-admin" ? bedViewHospitalId : null);
+      if (visibleHospitalId && !activeUserId.startsWith("ambulance-")) {
+        void loadIcuBeds(visibleHospitalId);
+      }
+      void loadCapacityForecast();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        setBackendOnline(false);
+        setError(BACKEND_OFFLINE_MESSAGE);
+      } else {
+        setError(err instanceof Error ? err.message : "Unexpected dashboard error");
+      }
+    } finally {
+      if (!silent) {
+        setDashboardLoading(false);
+      }
+    }
+  }
+
+  async function loadCapacityForecast() {
+    try {
+      const response = await apiFetch("/api/admin/capacity/forecast");
+      if (!response.ok) {
+        return;
+      }
+      setCapacityForecast(await response.json());
+    } catch {
+      // Dashboard polling remains the primary fallback if the forecast endpoint is temporarily unavailable.
+    }
+  }
+
+  async function runSimulation(silent = false) {
+    if (!silent) {
+      setSimulationLoading(true);
+    }
+    try {
+      const response = await apiFetch("/api/admin/simulation/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          scenario: simulationScenario,
+          duration_hours: Number(simulationHours) || 6,
+          intensity: Number(simulationIntensity) || 1,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Simulation request failed");
+      }
+      setSimulationData(await response.json());
+      setBackendOnline(true);
+      setError((current) => current === BACKEND_OFFLINE_MESSAGE ? null : current);
+    } catch (err) {
+      if (!silent) {
+        setError(err instanceof Error ? err.message : "Unexpected simulation error");
+      }
+    } finally {
+      if (!silent) {
+        setSimulationLoading(false);
+      }
+    }
+  }
+
+  async function loadMission(silent = false) {
+    if (!silent) {
+      setDashboardLoading(true);
+    }
+    setError(null);
+    try {
+      const response = await apiFetch("/api/ambulance/mission");
+      if (!response.ok) {
+        throw new Error("Mission request failed");
+      }
+      const data: AmbulanceMission = await response.json();
+      setBackendOnline(true);
+      setError((current) => current === BACKEND_OFFLINE_MESSAGE ? null : current);
+      setMissionData(data);
+      if (data.active_transfer && !blockingModal) {
+        const missionKey = `mission-${data.active_transfer.id}-${data.active_transfer.status}`;
+        const seen = seenTransfersByUserRef.current[activeUserId] ?? new Set<string>();
+        if (!seen.has(missionKey) && data.active_transfer.status === "ambulance_assigned") {
+          seen.add(missionKey);
+          seenTransfersByUserRef.current[activeUserId] = seen;
+          showNotice(
+            "Ambulance Mission Assigned",
+            `Mission assigned to ${data.ambulance.call_sign}: ${hospitalName(data.active_transfer.origin_hospital_id)} to ${hospitalName(data.active_transfer.destination_hospital_id)}.`,
+            "Acknowledge",
+            "warning",
+          );
+        }
+      }
+    } catch (err) {
+      if (err instanceof TypeError) {
+        setBackendOnline(false);
+        setError(BACKEND_OFFLINE_MESSAGE);
+      } else {
+        setError(err instanceof Error ? err.message : "Unexpected mission error");
+      }
+    } finally {
+      if (!silent) {
+        setDashboardLoading(false);
+      }
+    }
+  }
+
+  async function loadIcuBeds(hospitalId: string): Promise<IcuBed[]> {
+    try {
+      const response = await apiFetch(`/api/admin/hospitals/${hospitalId}/icu-beds`);
+      if (!response.ok) {
+        throw new Error("ICU bed request failed");
+      }
+      const data: IcuBed[] = await response.json();
+      setIcuBeds(data);
+      setIcuCensusBeds((current) => {
+        const patientBeds = data.filter((bed) => bed.patient);
+        if (activeUserId !== "super-admin") {
+          return patientBeds;
+        }
+        return [...current.filter((bed) => bed.hospital_id !== hospitalId), ...patientBeds]
+          .sort((first, second) => first.hospital_id.localeCompare(second.hospital_id) || first.bed_no.localeCompare(second.bed_no));
+      });
+      setSelectedBedId((current) => current && data.some((bed) => bed.id === current) ? current : data[0]?.id ?? null);
+      setBackendOnline(true);
+      return data;
+    } catch (err) {
+      if (err instanceof TypeError) {
+        setBackendOnline(false);
+        setError(BACKEND_OFFLINE_MESSAGE);
+      } else {
+        setError(err instanceof Error ? err.message : "Unexpected ICU bed error");
+      }
+      return [];
+    }
+  }
+
+  async function loadIcuCensus(): Promise<IcuBed[]> {
+    try {
+      const response = await apiFetch("/api/admin/icu-census");
+      if (!response.ok) {
+        throw new Error("ICU census request failed");
+      }
+      const data: IcuBed[] = await response.json();
+      setIcuCensusBeds(data);
+      return data;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unexpected ICU census error");
+      return [];
+    }
+  }
+
+  async function saveSelectedBed() {
+    const selectedBed = icuBeds.find((bed) => bed.id === selectedBedId);
+    if (!selectedBed) {
+      return;
+    }
+    const hasPatientDraft = [
+      bedPatientNo,
+      bedPatientName,
+      bedPatientIdentifier,
+      bedPatientDob,
+      bedPatientAge,
+      bedPatientSex,
+      bedPatientBloodType,
+      bedPatientCondition,
+      bedPatientDiagnosis,
+      bedPatientVitals,
+      bedPatientMedications,
+      bedPatientAllergies,
+      bedPatientInfectionRisk,
+      bedPatientContact,
+      bedPatientNextOfKin,
+      bedPatientAddress,
+      bedPatientNotes,
+    ].some((value) => value.trim().length > 0) || bedPatientIsolation;
+    if (hasPatientDraft && !bedPatientName.trim()) {
+      showNotice("Patient Name Required", "Enter a patient name before assigning this bed.", "Update Details", "warning");
+      return;
+    }
+    const parsedAge = bedPatientAge.trim() ? Number(bedPatientAge) : undefined;
+    if (parsedAge !== undefined && (!Number.isFinite(parsedAge) || parsedAge < 0 || parsedAge > 130)) {
+      showNotice("Valid Age Required", "Enter an age between 0 and 130 before saving this patient record.", "Update Details", "warning");
+      return;
+    }
+    const payload = hasPatientDraft
+      ? {
+          status: bedStatus === "available" ? "occupied" : bedStatus,
+          patient_no: bedPatientNo.trim() || `PAT-${selectedBed.bed_no}`,
+          patient_name: bedPatientName.trim(),
+          patient_identifier_value: bedPatientIdentifier.trim() || undefined,
+          patient_date_of_birth: bedPatientDob.trim() || undefined,
+          patient_age: parsedAge,
+          patient_sex: bedPatientSex.trim() || undefined,
+          patient_blood_type: bedPatientBloodType.trim() || undefined,
+          patient_condition: bedPatientCondition.trim() || "under observation",
+          diagnosis: bedPatientDiagnosis.trim() || undefined,
+          vitals: parseVitalsText(bedPatientVitals),
+          medications: parseMedicationText(bedPatientMedications),
+          allergies: bedPatientAllergies.trim() || undefined,
+          infection_risk: bedPatientInfectionRisk.trim() || undefined,
+          isolation_required: bedPatientIsolation,
+          emergency_contact: bedPatientContact.trim() || undefined,
+          next_of_kin: bedPatientNextOfKin.trim() || undefined,
+          address: bedPatientAddress.trim() || undefined,
+          notes: bedPatientNotes.trim() || undefined,
+        }
+      : { status: bedStatus };
+    const response = await apiFetch(`/api/admin/icu-beds/${selectedBed.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      setError("ICU bed update failed");
+      return;
+    }
+    setBedEditorDirty(false);
+    await loadIcuBeds(selectedBed.hospital_id);
+    await loadDashboard(true);
+  }
+
+  async function clearSelectedBed() {
+    const selectedBed = icuBeds.find((bed) => bed.id === selectedBedId);
+    if (!selectedBed) {
+      return;
+    }
+    const response = await apiFetch(`/api/admin/icu-beds/${selectedBed.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ clear_patient: true }),
+    });
+    if (!response.ok) {
+      setError("Patient discharge failed");
+      return;
+    }
+    setBedEditorDirty(false);
+    await loadIcuBeds(selectedBed.hospital_id);
+    await loadDashboard(true);
+  }
+
+  async function missionAction(action: "start-pickup" | "arrive-pickup" | "complete") {
+    const transferId = missionData?.active_transfer?.id;
+    const destinationHospitalId = missionData?.active_transfer?.destination_hospital_id;
+    if (!transferId) {
+      return;
+    }
+    const response = await apiFetch(`/api/ambulance/mission/${transferId}/${action}`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      setError("Mission update failed");
+      return;
+    }
+    setMissionData(await response.json());
+    await loadDashboard(true);
+    if (action === "complete" && destinationHospitalId) {
+      await loadIcuBeds(destinationHospitalId);
+    }
+  }
+
+  async function updateHospitalBeds(hospital: Hospital, occupiedBeds: number) {
+    const nextOccupiedBeds = Math.max(0, Math.min(hospital.total_beds, occupiedBeds));
+    const response = await apiFetch(`/api/admin/hospitals/${hospital.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ occupied_beds: nextOccupiedBeds }),
+    });
+    if (!response.ok) {
+      setError("Bed update failed");
+      return;
+    }
+    await loadDashboard();
+    const hospitalsResponse = await apiFetch("/api/hospitals");
+    if (hospitalsResponse.ok) {
+      setHospitals(await hospitalsResponse.json());
+    }
+  }
+
+  async function updateAmbulanceStatus(ambulance: AmbulanceSummary, status: string) {
+    const response = await apiFetch(`/api/admin/ambulances/${ambulance.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status }),
+    });
+    if (!response.ok) {
+      setError("Ambulance status update failed");
+      return;
+    }
+    await loadDashboard();
+  }
+
+  function validateTransferPatientPacket() {
+    const missing: string[] = [];
+    if (!transferPatientName.trim()) {
+      missing.push("patient name");
+    }
+    if (!transferPatientAge.trim()) {
+      missing.push("age");
+    }
+    const numericAge = Number(transferPatientAge);
+    if (transferPatientAge.trim() && (!Number.isFinite(numericAge) || numericAge < 0 || numericAge > 130)) {
+      missing.push("valid age");
+    }
+    if (!transferPatientBloodType.trim()) {
+      missing.push("blood type");
+    }
+    if (!transferPatientContact.trim()) {
+      missing.push("emergency contact");
+    }
+    if (missing.length) {
+      showNotice(
+        "Patient Details Required",
+        `Add ${missing.join(", ")} before sending this transfer request. The receiving hospital needs this packet to reserve the correct ICU bed.`,
+        "Update Details",
+        "warning",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  async function createTransferFromRecommendation(recommendation: Recommendation) {
+    if (!validateTransferPatientPacket()) {
+      return;
+    }
+    setBlockingModal({
+      title: "Send Transfer Request?",
+      message: `Send ${transferPatientName.trim()} (${transferPatientAge.trim()}, ${transferPatientBloodType.trim()}) from ${hospitalName(originId)} to ${recommendation.destination_name}? The receiving hospital must accept before ambulance dispatch.`,
+      tone: "warning",
+      confirmLabel: "Send Request",
+      cancelLabel: "Cancel",
+      onConfirm: async () => {
+        setBlockingModal(null);
+        await sendTransferRequest(recommendation);
+      },
+      onCancel: () => setBlockingModal(null),
+    });
+  }
+
+  async function sendTransferRequest(recommendation: Recommendation) {
+    if (!validateTransferPatientPacket()) {
+      return;
+    }
+    const response = await apiFetch("/api/admin/transfers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        origin_hospital_id: originId,
+        destination_hospital_id: recommendation.destination_hospital_id,
+        required_icu_type: requiredIcu,
+        patient_condition: {
+          condition_type: conditionType,
+          oxygen_saturation_band: oxygen,
+          blood_pressure_band: bloodPressure,
+          consciousness_level: consciousness,
+          ventilator_required: ventilatorRequired,
+        },
+        patient_name: transferPatientName.trim(),
+        patient_identifier_value: transferPatientIdentifier.trim() || undefined,
+        patient_date_of_birth: transferPatientDob.trim() || undefined,
+        patient_age: Number(transferPatientAge),
+        patient_sex: transferPatientSex === "unknown" ? undefined : transferPatientSex,
+        patient_blood_type: transferPatientBloodType.trim(),
+        patient_allergies: transferPatientAllergies.trim() || undefined,
+        patient_emergency_contact: transferPatientContact.trim(),
+        patient_diagnosis: transferPatientDiagnosis.trim() || conditionType,
+        patient_vitals: parseVitalsText(transferPatientVitals),
+        patient_medications: parseMedicationText(transferPatientMedications),
+        patient_infection_risk: transferPatientInfectionRisk === "none" ? undefined : transferPatientInfectionRisk,
+        patient_isolation_required: transferPatientIsolation,
+        handover_notes: transferPatientAllergies.trim() || undefined,
+        notes: `Created from recommendation rank ${recommendation.rank}`,
+      }),
+    });
+    if (!response.ok) {
+      setError("Transfer request creation failed");
+      return;
+    }
+    const transfer: TransferSummary = await response.json();
+    await loadDashboard();
+    showNotice(
+      "Request Sent",
+      `Transfer request sent to ${recommendation.destination_name}. Request ID: ${transfer.id.slice(0, 8)}.`,
+      "Continue",
+      "success",
+    );
+  }
+
+  async function transferAction(transferId: string, action: "accept" | "reject" | "assign-ambulance") {
+    const transfer = dashboardData?.transfers.find((item) => item.id === transferId);
+    if (action === "accept" && transfer) {
+      setBlockingModal({
+        title: "Accept Transfer Request?",
+        message: `Accept transfer from ${hospitalName(transfer.origin_hospital_id)} to ${hospitalName(transfer.destination_hospital_id)}? This will reserve one ICU bed, release the origin bed, and auto-assign an ambulance if one is available.`,
+        tone: "warning",
+        confirmLabel: "Accept Request",
+        cancelLabel: "Cancel",
+        onConfirm: async () => {
+          setBlockingModal(null);
+          await executeTransferAction(transferId, action);
+        },
+        onCancel: () => setBlockingModal(null),
+      });
+      return;
+    }
+    await executeTransferAction(transferId, action);
+  }
+
+  async function executeTransferAction(transferId: string, action: "accept" | "reject" | "assign-ambulance") {
+    const response = await apiFetch(`/api/admin/transfers/${transferId}/${action}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: action === "assign-ambulance" ? undefined : JSON.stringify({ notes: action }),
+    });
+    if (!response.ok) {
+      setError(`${action} failed`);
+      return;
+    }
+    const updatedTransfer: TransferSummary = await response.json();
+    await loadDashboard();
+    const bedHospitalId = updatedTransfer.destination_hospital_id || icuHospitalId;
+    if (bedHospitalId) {
+      const freshBeds = await loadIcuBeds(bedHospitalId);
+      if (updatedTransfer.assigned_bed_id && freshBeds.some((bed) => bed.id === updatedTransfer.assigned_bed_id)) {
+        setSelectedBedId(updatedTransfer.assigned_bed_id);
+        setMapCommandView("beds");
+      }
+    }
+    if (action === "accept") {
+      showNotice(
+        "Request Accepted",
+        updatedTransfer.ambulance_id
+          ? `Transfer accepted. Bed ${updatedTransfer.assigned_bed_id ?? "reserved"} and ambulance ${updatedTransfer.ambulance_id} assigned.`
+          : `Transfer accepted. Bed ${updatedTransfer.assigned_bed_id ?? "reserved"} assigned; waiting for ambulance.`,
+        "Continue",
+        "success",
+      );
+    }
+  }
+
+  async function openTransferDetail(transfer: TransferSummary) {
+    setSelectedTransferDetail(transfer);
+    setTransferEvents([]);
+    setEventsLoading(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`/api/admin/transfers/${transfer.id}/events`);
+      if (!response.ok) {
+        throw new Error("Transfer timeline request failed");
+      }
+      setTransferEvents(await response.json());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unexpected transfer timeline error");
+    } finally {
+      setEventsLoading(false);
+    }
+  }
+
+  function closeTransferDetail() {
+    setSelectedTransferDetail(null);
+    setTransferEvents([]);
+  }
+
+  async function loadRoute(destinationId: string, urgencyClass = recommendationData?.urgency_class ?? "critical") {
+    setRouteLoading(true);
+    setError(null);
+    try {
+      const response = await apiFetch("/api/routes/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin_hospital_id: originId,
+          destination_hospital_id: destinationId,
+          urgency_class: urgencyClass,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Route optimization failed");
+      }
+      const data: RouteResponse = await response.json();
+      setRoutes(data.routes);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unexpected route error");
+    } finally {
+      setRouteLoading(false);
+    }
+  }
+
+  function selectRecommendation(recommendation: Recommendation) {
+    setSelectedDestinationId(recommendation.destination_hospital_id);
+    void loadRoute(recommendation.destination_hospital_id);
+  }
+
+  function formatStatus(status: string) {
+    return status.replace(/_/g, " ");
+  }
+
+  function parseEventDetails(detailsJson: string | null) {
+    if (!detailsJson) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(detailsJson) as Record<string, unknown>;
+      return Object.entries(parsed).map(([key, value]) => `${formatStatus(key)}: ${String(value)}`);
+    } catch {
+      return [];
+    }
+  }
+
+  function parseMissionRoute(transfer?: TransferSummary | null): MissionRoutePayload | null {
+    if (!transfer?.route_payload_json) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(transfer.route_payload_json) as {
+        pickup_route?: MissionRoutePayload;
+        destination_route?: MissionRoutePayload;
+        mission_route?: MissionRoutePayload;
+      };
+      if (["ambulance_assigned", "ambulance_en_route_to_pickup"].includes(transfer.status)) {
+        return parsed.pickup_route ?? parsed.mission_route ?? null;
+      }
+      return parsed.destination_route ?? parsed.mission_route ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function parseDispatchPayload(transfer?: TransferSummary | null): DispatchPayload | null {
+    if (!transfer?.route_payload_json) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(transfer.route_payload_json) as { dispatch?: DispatchPayload };
+      return parsed.dispatch ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function parseReturnRoute(): MissionRoutePayload | null {
+    if (!missionData?.return_route_json) {
+      return null;
+    }
+    try {
+      return JSON.parse(missionData.return_route_json) as MissionRoutePayload;
+    } catch {
+      return null;
+    }
+  }
+
+  function nextMissionAction(transfer?: TransferSummary | null) {
+    if (!transfer) {
+      return null;
+    }
+    if (transfer.status === "ambulance_assigned") {
+      return { action: "start-pickup" as const, label: "Start Pickup", target: "pickup" };
+    }
+    if (transfer.status === "ambulance_en_route_to_pickup") {
+      return { action: "arrive-pickup" as const, label: "Patient Onboard", target: "destination" };
+    }
+    if (transfer.status === "en_route_to_destination") {
+      return { action: "complete" as const, label: "Complete Transfer", target: "destination" };
+    }
+    return null;
+  }
+
+  function googleMapsUrl(transfer?: TransferSummary | null) {
+    if (!transfer) {
+      return null;
+    }
+    const pickup = `${transfer.pickup_latitude},${transfer.pickup_longitude}`;
+    const dropoff = `${transfer.dropoff_latitude},${transfer.dropoff_longitude}`;
+    if (
+      transfer.pickup_latitude == null ||
+      transfer.pickup_longitude == null ||
+      transfer.dropoff_latitude == null ||
+      transfer.dropoff_longitude == null
+    ) {
+      return null;
+    }
+    return `https://www.google.com/maps/dir/?api=1&origin=${pickup}&destination=${dropoff}&travelmode=driving`;
+  }
+
+  function canAcceptTransfer(transfer: TransferSummary) {
+    return transfer.status === "pending_destination_acceptance";
+  }
+
+  function canAssignAmbulance(transfer: TransferSummary) {
+    return transfer.status === "accepted_pending_ambulance";
+  }
+
+  function formatDateTime(value?: string) {
+    if (!value) {
+      return "";
+    }
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      month: "short",
+      day: "numeric",
+    }).format(new Date(value));
+  }
+
+  function parseVitalsText(value: string) {
+    const vitals: Record<string, string> = {};
+    value
+      .split(/[,\n]/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .forEach((part) => {
+        const [rawKey, ...rawValue] = part.split(/[:=]/);
+        const key = rawKey?.trim();
+        const nextValue = rawValue.join(":").trim();
+        if (key && nextValue) {
+          vitals[key] = nextValue;
+        }
+      });
+    return Object.keys(vitals).length ? vitals : undefined;
+  }
+
+  function parseMedicationText(value: string) {
+    return value
+      .split(/[,\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function formatVitals(value: Record<string, unknown> | null | undefined) {
+    if (!value) {
+      return "";
+    }
+    return Object.entries(value).map(([key, item]) => `${key}: ${String(item)}`).join(", ");
+  }
+
+  function showNotice(
+    title: string,
+    message: string,
+    confirmLabel = "Acknowledge",
+    tone: BlockingModal["tone"] = "info",
+    onConfirm?: () => void | Promise<void>,
+  ) {
+    setBlockingModal({
+      title,
+      message,
+      tone,
+      confirmLabel,
+      onConfirm: async () => {
+        setBlockingModal(null);
+        await onConfirm?.();
+      },
+    });
+  }
+
+  function processDashboardNotifications(data: DashboardSummary) {
+    const seenTransfers = seenTransfersByUserRef.current[activeUserId] ?? new Set<string>();
+    const statusMap = transferStatusByUserRef.current[activeUserId] ?? new Map<string, string>();
+    const ambulanceMap = transferAmbulanceByUserRef.current[activeUserId] ?? new Map<string, string | null>();
+    const user = users.find((item) => item.id === activeUserId);
+    const hospitalId = user?.hospital_id ?? null;
+    if (!user && activeUserId !== "super-admin") {
+      return;
+    }
+
+    if (blockingModal) {
+      return;
+    }
+
+    for (const transfer of data.transfers) {
+      const previousStatus = statusMap.get(transfer.id);
+      const previousAmbulance = ambulanceMap.get(transfer.id);
+      const isIncoming = Boolean(hospitalId && transfer.destination_hospital_id === hospitalId);
+      const isOutgoing = Boolean(hospitalId && transfer.origin_hospital_id === hospitalId);
+      const isRelevant = activeUserId === "super-admin" || isIncoming || isOutgoing;
+
+      if (isIncoming && !seenTransfers.has(transfer.id) && transfer.status === "pending_destination_acceptance") {
+        seenTransfers.add(transfer.id);
+        showNotice(
+          "Request Arrived",
+          `${hospitalName(transfer.origin_hospital_id)} sent ${transfer.patient_name ?? "a patient"} for ${transfer.required_icu_type}.`,
+          "Review Request",
+          "warning",
+          () => {
+            setConsoleTab("requests");
+            setHighlightedTransferId(transfer.id);
+          },
+        );
+        break;
+      }
+
+      if (
+        isOutgoing &&
+        previousStatus === "pending_destination_acceptance" &&
+        ["accepted_pending_ambulance", "ambulance_assigned"].includes(transfer.status)
+      ) {
+        showNotice(
+          "Request Accepted",
+          `${hospitalName(transfer.destination_hospital_id)} accepted your transfer request.`,
+          "Continue",
+          "success",
+        );
+        break;
+      }
+
+      if (isRelevant && !previousAmbulance && transfer.ambulance_id) {
+        showNotice(
+          "Ambulance Assigned",
+          `Ambulance ${transfer.ambulance_id} has been assigned to the transfer from ${hospitalName(transfer.origin_hospital_id)} to ${hospitalName(transfer.destination_hospital_id)}.`,
+          "Acknowledge",
+          "success",
+        );
+        break;
+      }
+    }
+
+    data.transfers.forEach((transfer) => {
+      seenTransfers.add(transfer.id);
+      statusMap.set(transfer.id, transfer.status);
+      ambulanceMap.set(transfer.id, transfer.ambulance_id);
+    });
+    seenTransfersByUserRef.current[activeUserId] = seenTransfers;
+    transferStatusByUserRef.current[activeUserId] = statusMap;
+    transferAmbulanceByUserRef.current[activeUserId] = ambulanceMap;
+  }
+
+  function transferStage(transfer: TransferSummary) {
+    const stages = [
+      "pending_destination_acceptance",
+      "ambulance_assigned",
+      "ambulance_en_route_to_pickup",
+      "en_route_to_destination",
+      "completed",
+    ];
+    if (transfer.status === "rejected" || transfer.status === "cancelled") {
+      return -1;
+    }
+    const index = stages.indexOf(transfer.status);
+    if (index >= 0) {
+      return index;
+    }
+    if (transfer.status === "accepted_pending_ambulance") {
+      return 1;
+    }
+    return 0;
+  }
+
+  function transferProgressState(transfer: TransferSummary) {
+    if (transfer.status === "completed") {
+      return { label: "Completed", className: "completed" };
+    }
+    if (transfer.status === "rejected" || transfer.status === "cancelled") {
+      return { label: formatStatus(transfer.status), className: "stopped" };
+    }
+    if (transfer.status === "pending_destination_acceptance") {
+      return { label: "Pending acceptance", className: "pending" };
+    }
+    return { label: "In progress", className: "active" };
+  }
+
+  function timelineClass(transfer: TransferSummary, index: number) {
+    const stage = transferStage(transfer);
+    if (transfer.status === "rejected" || transfer.status === "cancelled") {
+      return index === 0 ? "stopped" : "";
+    }
+    if (transfer.status === "completed") {
+      return "done";
+    }
+    if (index < stage) {
+      return "done";
+    }
+    if (index === stage) {
+      return "current";
+    }
+    return "";
+  }
+
+  function renderTransferCard(transfer: TransferSummary, mode: "incoming" | "outgoing" | "command") {
+    const progressState = transferProgressState(transfer);
+    const canShowAccept = canAcceptTransfer(transfer) && (mode !== "outgoing" || activeUserId === "super-admin");
+    return (
+      <div className={`transfer-card ${highlightedTransferId === transfer.id ? "highlighted" : ""}`} key={transfer.id}>
+        <div className="transfer-card-head">
+          <div>
+            <strong>{`${hospitalName(transfer.origin_hospital_id)} -> ${hospitalName(transfer.destination_hospital_id)}`}</strong>
+            <span>{formatStatus(transfer.status)} / {transfer.urgency_class}</span>
+          </div>
+          <span className={`urgency ${transfer.urgency_class}`}>{transfer.urgency_class}</span>
+        </div>
+        <div className={`transfer-state ${progressState.className}`}>
+          {progressState.label}
+        </div>
+        <div className="transfer-meta">
+          <span>ICU: {transfer.required_icu_type}</span>
+          <span>Patient: {transfer.patient_name ?? "Unnamed"} / {transfer.patient_condition}</span>
+          {transfer.assigned_bed_id && <span>Bed: {icuBeds.find((bed) => bed.id === transfer.assigned_bed_id)?.bed_no ?? transfer.assigned_bed_id}</span>}
+          {transfer.ambulance_id && <span>Ambulance: {transfer.ambulance_id}</span>}
+          {transfer.created_at && <span>Created: {formatDateTime(transfer.created_at)}</span>}
+        </div>
+        <div className="timeline">
+          {["Request", "Assigned", "Pickup", "Destination", "Done"].map((label, index) => (
+            <span className={timelineClass(transfer, index)} key={label}>
+              {label}
+            </span>
+          ))}
+        </div>
+        <div className="row-actions">
+          <button type="button" className="secondary-action" onClick={() => void openTransferDetail(transfer)}>
+            Details
+          </button>
+          {canShowAccept && (
+            <>
+              <button type="button" title="Accept" onClick={() => transferAction(transfer.id, "accept")}>
+                <Check size={15} />
+              </button>
+              <button type="button" title="Reject" onClick={() => transferAction(transfer.id, "reject")}>
+                <X size={15} />
+              </button>
+            </>
+          )}
+          {activeUserId === "super-admin" && canAssignAmbulance(transfer) && (
+            <button type="button" title="Assign ambulance" onClick={() => transferAction(transfer.id, "assign-ambulance")}>
+              <Ambulance size={15} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function changeOrigin(hospitalId: string) {
+    setOriginId(hospitalId);
+    setOriginPickerOpen(false);
+    setRecommendationData(null);
+    setSelectedDestinationId(null);
+    setRoutes([]);
+  }
+
+  function changeBedViewHospital(hospitalId: string) {
+    setBedViewHospitalId(hospitalId);
+    setSelectedBedId(null);
+    setBedEditorDirty(false);
+    void loadIcuBeds(hospitalId);
+  }
+
+  async function selectCensusBed(bed: IcuBed) {
+    setBedEditorDirty(false);
+    if (bed.hospital_id !== bedViewHospitalId) {
+      setBedViewHospitalId(bed.hospital_id);
+      await loadIcuBeds(bed.hospital_id);
+    }
+    setSelectedBedId(bed.id);
+  }
+
+  async function signIn() {
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      const response = await apiFetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUsername.trim(), password: loginPassword }),
+      }, false);
+      if (!response.ok) {
+        throw new Error("Invalid username or password");
+      }
+      const payload: AuthTokenResponse = await response.json();
+      accessToken = payload.access_token;
+      setLoginPassword("");
+      applyAuthenticatedUser(payload.user);
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Unable to sign in");
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  async function signOut() {
+    const csrfToken = cookieValue("icu_csrf");
+    try {
+      await apiFetch("/api/auth/logout", {
+        method: "POST",
+        headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+      });
+    } finally {
+      accessToken = null;
+      setIsSignedIn(false);
+      setUsers([]);
+      setDashboardData(null);
+      setMissionData(null);
+      setRecommendationData(null);
+      setRoutes([]);
+    }
+  }
+
+  const userLabel = (user: UserSummary) => {
+    if (user.hospital_id) {
+      const hospital = hospitals.find((item) => item.id === user.hospital_id);
+      return `${hospital?.name ?? user.name} Admin`;
+    }
+    if (user.ambulance_id) {
+      return user.name;
+    }
+    return user.name;
+  };
+  const hospitalName = (hospitalId: string) =>
+    hospitals.find((hospital) => hospital.id === hospitalId)?.name ?? `Hospital ${hospitalId}`;
+  const fallbackSuperAdmin: UserSummary = {
+    id: "super-admin",
+    name: "Super Admin",
+    role: "super_admin",
+    hospital_id: null,
+    ambulance_id: null,
+  };
+  const activeUser = users.find((user) => user.id === activeUserId) ?? fallbackSuperAdmin;
+  const isHospitalAdmin = Boolean(activeUser.hospital_id);
+  const activeHospitalId = activeUser.hospital_id;
+  const icuHospitalId = activeHospitalId ?? (activeUserId === "super-admin" ? bedViewHospitalId : null);
+  const selectedIcuBed = icuBeds.find((bed) => bed.id === selectedBedId) ?? null;
+  const bedStatusCounts = icuBedStatusOptions.reduce<Record<string, number>>((counts, status) => {
+    counts[status] = icuBeds.filter((bed) => bed.status === status).length;
+    return counts;
+  }, {});
+  const occupiedIcuBeds = activeUserId === "super-admin"
+    ? icuCensusBeds
+    : icuCensusBeds.length ? icuCensusBeds : icuBeds.filter((bed) => bed.patient);
+  const hospitalBedTotal = dashboardData?.hospitals.reduce((sum, hospital) => sum + hospital.total_beds, 0) ?? 0;
+  const hospitalBedAvailable =
+    dashboardData?.hospitals.reduce((sum, hospital) => sum + hospital.available_beds, 0) ?? 0;
+  const ambulanceAvailable =
+    dashboardData?.ambulances.filter((ambulance) => ambulance.status === "available").length ?? 0;
+  const activeTransfers =
+    dashboardData?.transfers.filter((transfer) => !["completed", "rejected"].includes(transfer.status)).length ?? 0;
+  const incomingTransfers =
+    dashboardData?.transfers.filter((transfer) => activeHospitalId && transfer.destination_hospital_id === activeHospitalId) ?? [];
+  const outgoingTransfers =
+    dashboardData?.transfers.filter((transfer) => activeHospitalId && transfer.origin_hospital_id === activeHospitalId) ?? [];
+  const activeMission = missionData?.active_transfer ?? null;
+  const activeMissionRoute = parseMissionRoute(activeMission);
+  const returnRoute = parseReturnRoute();
+  const crewDisplayedRoute = activeMissionRoute ?? returnRoute;
+  const missionNextAction = nextMissionAction(activeMission);
+  const missionGoogleMapsUrl = googleMapsUrl(activeMission);
+  const missionPickupHospital = activeMission ? hospitalName(activeMission.origin_hospital_id) : "";
+  const missionDropoffHospital = activeMission ? hospitalName(activeMission.destination_hospital_id) : "";
+  const visibleAmbulances = activeUserId.startsWith("ambulance-")
+    ? missionData?.ambulance
+      ? [missionData.ambulance]
+      : []
+    : dashboardData?.ambulances ?? [];
+  const displayedRouteLine = (crewDisplayedRoute?.polyline?.length ?? 0) >= 2 ? crewDisplayedRoute?.polyline ?? [] : routeLine;
+  const ambulanceDriverMode = activeUserId.startsWith("ambulance-") && (
+    !!returnRoute ||
+    activeMission?.status === "ambulance_en_route_to_pickup" ||
+    activeMission?.status === "en_route_to_destination"
+  );
+  const missionLegLabel = activeMission
+    ? ["ambulance_assigned", "ambulance_en_route_to_pickup"].includes(activeMission.status)
+      ? "Route to pickup hospital"
+      : "Route to drop-off hospital"
+    : returnRoute
+      ? "Route to base hospital"
+      : "";
+  const navigationInstruction = (() => {
+    const ambulance = missionData?.ambulance;
+    const route = crewDisplayedRoute;
+    if (!ambulance || !route?.polyline?.length) {
+      return null;
+    }
+    const routePoints = route.polyline;
+    const cumulativeMeters = [0];
+    for (let index = 1; index < routePoints.length; index += 1) {
+      cumulativeMeters.push(
+        cumulativeMeters[index - 1] + routeDistanceMeters(routePoints, index - 1, index),
+      );
+    }
+    const totalMeters = cumulativeMeters[cumulativeMeters.length - 1];
+    const fallbackIndex = nearestRouteIndex(routePoints, ambulance.latitude, ambulance.longitude);
+    const progressMeters = Math.max(
+      0,
+      Math.min(ambulance.route_progress_m || cumulativeMeters[fallbackIndex], totalMeters),
+    );
+    let nearestIndex = cumulativeMeters.findIndex((distance) => distance >= progressMeters);
+    if (nearestIndex < 0) {
+      nearestIndex = routePoints.length - 1;
+    }
+    const roadSteps = route.route_steps ?? [];
+    const currentStep =
+      roadSteps.find((step) => nearestIndex >= step.start_index && nearestIndex <= step.end_index)
+      ?? roadSteps.find((step) => step.end_index >= nearestIndex);
+    const upcomingTurn = roadSteps.find(
+      (step) => step.start_index > nearestIndex + 1 && !["continue", "depart"].includes(step.maneuver),
+    );
+    const currentRoadName = currentStep?.road_name || "current road";
+    let instructionText = "";
+    let detailText = "";
+
+    if (upcomingTurn) {
+      const metersToTurn = routeDistanceMeters(routePoints, nearestIndex, upcomingTurn.start_index);
+      instructionText = `${formatManeuver(upcomingTurn.maneuver)} in ${formatNavigationDistance(metersToTurn)}`;
+      detailText = upcomingTurn.road_name ? `onto ${upcomingTurn.road_name}` : `from ${currentRoadName}`;
+    } else if (currentStep) {
+      const metersOnRoad = routeDistanceMeters(routePoints, nearestIndex, currentStep.end_index);
+      instructionText = currentStep.instruction ?? `Continue on ${currentRoadName}`;
+      detailText = `remaining ${formatNavigationDistance(metersOnRoad)}`;
+    } else {
+      const lookAheadIndex = Math.min(nearestIndex + 7, routePoints.length - 1);
+      const nextIndex = Math.min(nearestIndex + 14, routePoints.length - 1);
+      const firstBearing = bearingDegrees(routePoints[nearestIndex], routePoints[lookAheadIndex]);
+      const secondBearing = bearingDegrees(routePoints[lookAheadIndex], routePoints[nextIndex]);
+      const inferredTurn = turnFromBearings(firstBearing, secondBearing);
+      const metersAhead = routeDistanceMeters(routePoints, nearestIndex, lookAheadIndex);
+      instructionText =
+        inferredTurn === "continue"
+          ? `Continue for ${formatNavigationDistance(metersAhead)}`
+          : `${formatManeuver(inferredTurn)} in ${formatNavigationDistance(metersAhead)}`;
+      detailText = "on current road";
+    }
+
+    const nextPoint = routePoints[Math.min(nearestIndex + 5, routePoints.length - 1)];
+    const direction = bearingDirection([ambulance.latitude, ambulance.longitude], nextPoint);
+    const remainingMeters = Math.max(0, totalMeters - progressMeters);
+    const progressPercent = totalMeters > 0 ? Math.round((progressMeters / totalMeters) * 100) : 0;
+    const speedMps = Math.max((ambulance.speed_kph || 0) / 3.6, 0);
+    const routeRatio = totalMeters > 0 ? remainingMeters / totalMeters : 0;
+    const etaMinutes = speedMps > 1
+      ? remainingMeters / speedMps / 60
+      : (route.estimated_minutes ?? 0) * routeRatio;
+    return {
+      direction,
+      instructionText,
+      detailText,
+      remainingMeters,
+      progressPercent,
+      etaMinutes,
+      speedKph: ambulance.speed_kph || 0,
+    };
+  })();
+  const selectedDispatch = parseDispatchPayload(selectedTransferDetail);
+  const forecastHospitals = capacityForecast?.hospitals ?? [];
+  const mostPressuredForecast = forecastHospitals.length
+    ? [...forecastHospitals].sort((a, b) => {
+        const aWorst = Math.max(...a.points.map((point) => point.pressure_score));
+        const bWorst = Math.max(...b.points.map((point) => point.pressure_score));
+        return bWorst - aWorst;
+      })[0]
+    : null;
+  const simulationImpacts = simulationData?.hospital_impacts ?? [];
+
+  const commandHospitals = hospitals.slice(0, 9);
+  const loginBedTotal = dashboardData?.hospitals.reduce((sum, hospital) => sum + hospital.total_beds, 0) ?? 0;
+  const loginTransferTotal = dashboardData?.transfers.length ?? 0;
+  const fleetMoving = visibleAmbulances.filter((ambulance) =>
+    ["repositioning", "returning", "assigned", "en_route", "transporting"].includes(ambulance.status),
+  );
+  const fleetOffline = visibleAmbulances.filter((ambulance) => ambulance.status === "offline");
+  const fleetAvailable = visibleAmbulances.filter((ambulance) => ambulance.status === "available");
+  const occupancyPercent = hospitalBedTotal
+    ? Math.round(((hospitalBedTotal - hospitalBedAvailable) / hospitalBedTotal) * 100)
+    : 0;
+  const criticalTransfers =
+    dashboardData?.transfers.filter(
+      (transfer) => transfer.urgency_class === "critical" && !["completed", "rejected"].includes(transfer.status),
+    ) ?? [];
+  const consoleTabs: { id: ConsoleTab; label: string; icon: typeof Activity; count?: number }[] = [
+    { id: "overview", label: "Overview", icon: Activity },
+    { id: "transfer", label: "Transfer", icon: Route, count: recommendationData?.recommendations.length },
+    { id: "requests", label: "Requests", icon: Bell, count: activeTransfers },
+    { id: "fleet", label: "Fleet", icon: Ambulance, count: ambulanceAvailable },
+  ];
+  const mapCommandTabs: { id: MapCommandView; label: string; icon: typeof Activity }[] = [
+    { id: "live", label: "Live Map", icon: Activity },
+    { id: "fleet", label: "Fleet", icon: Ambulance },
+    { id: "capacity", label: "Capacity", icon: Building2 },
+    { id: "beds", label: "Beds", icon: Bed },
+    { id: "transfers", label: "Transfers", icon: Route },
+    { id: "analytics", label: "Analytics", icon: BarChart3 },
+    { id: "alerts", label: "Alerts", icon: Bell },
+  ];
+
+  if (!isSignedIn) {
+    return (
+      <main className="login-shell">
+        <section className="network-stage" aria-label="Colombo hospital network status">
+          <div className="network-board">
+            <div className="network-grid" />
+            <div className="network-line line-one" />
+            <div className="network-line line-two" />
+            <div className="network-line line-three" />
+            {commandHospitals.map((hospital, index) => (
+              <span
+                className={`network-node node-${index + 1}`}
+                key={hospital.id}
+                style={{ "--node-color": stableColor(hospital.id, hospitalMarkerColors) } as CSSProperties}
+              >
+                {hospitalCode(hospital.name)}
+              </span>
+            ))}
+            <span className="network-ambulance amb-one">AMB</span>
+            <span className="network-ambulance amb-two">AMB</span>
+            <p>Colombo Hospital Network - Live Transfer Feed</p>
+          </div>
+          <div className="login-title">
+            <h1>National ICU Command Center</h1>
+            <p>Coordinating ICU transfers across Colombo's 9 major hospitals</p>
+            <div className="login-metrics">
+              <div>
+                <strong>{hospitals.length || 9}</strong>
+                <span>Hospitals</span>
+              </div>
+              <div>
+                <strong>{loginBedTotal}</strong>
+                <span>ICU Beds</span>
+              </div>
+              <div>
+                <strong>{loginTransferTotal}</strong>
+                <span>Transfers</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="login-card">
+          <div className="login-card-head">
+            <span className="command-logo">
+              <ShieldCheck size={26} />
+            </span>
+            <div>
+              <h2>ICU Command</h2>
+              <p>Sri Lanka Ministry of Health</p>
+            </div>
+          </div>
+
+          <div className="login-copy">
+            <h1>Welcome back</h1>
+            <p>Sign in to access the command center</p>
+          </div>
+
+          <label>
+            Username
+            <input
+              type="text"
+              value={loginUsername}
+              autoComplete="username"
+              onChange={(event) => setLoginUsername(event.target.value)}
+              placeholder="Your assigned username"
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={loginPassword}
+              autoComplete="current-password"
+              onChange={(event) => setLoginPassword(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && loginUsername && loginPassword && !loginBusy) {
+                  void signIn();
+                }
+              }}
+              placeholder="Password"
+            />
+          </label>
+
+          {loginError && <div className="login-error" role="alert"><AlertCircle size={16} /> {loginError}</div>}
+          <button
+            type="button"
+            className="login-primary"
+            onClick={() => void signIn()}
+            disabled={!loginUsername.trim() || !loginPassword || loginBusy}
+          >
+            {loginBusy ? <><Loader2 size={17} className="spin" /> Signing in...</> : "Sign In"}
+          </button>
+          <div className="system-ready">
+            <span className={backendOnline ? "" : "offline"} />
+            {backendOnline ? "All Hospital Services Operational" : "Connecting to hospital services..."}
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="shell command-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <Activity size={24} />
+          <div>
+            <h1>ICU Transfer DSS</h1>
+            <p>Colombo emergency transfer planning</p>
+          </div>
+          <span
+            className={backendOnline ? "connection-indicator online" : "connection-indicator offline"}
+            title={backendOnline ? "Backend connected" : "Backend reconnecting"}
+          />
+        </div>
+
+        {!activeUserId.startsWith("ambulance-") && dashboardData && (
+          <section className="command-summary" aria-label="Command center summary">
+            <div>
+              <strong>{dashboardData.hospitals.length}</strong>
+              <span>Hospitals</span>
+            </div>
+            <div>
+              <strong>{hospitalBedAvailable}</strong>
+              <span>ICU open</span>
+            </div>
+            <div>
+              <strong>{ambulanceAvailable}</strong>
+              <span>Ambulances</span>
+            </div>
+            <div>
+              <strong>{activeTransfers}</strong>
+              <span>Active</span>
+            </div>
+          </section>
+        )}
+
+        <section className="panel">
+          <h2>Operator</h2>
+          <div className="authenticated-operator">
+            <UserCog size={18} />
+            <div>
+              <strong>{userLabel(activeUser)}</strong>
+              <span>{activeUser.role.split("_").join(" ")}</span>
+            </div>
+          </div>
+          <button type="button" className="secondary-action" onClick={() => void signOut()}>
+            Sign Out
+          </button>
+        </section>
+
+        {!activeUserId.startsWith("ambulance-") && (
+          <nav className="console-tabbar" aria-label="Main console sections">
+            {consoleTabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  type="button"
+                  className={consoleTab === tab.id ? "active" : ""}
+                  key={tab.id}
+                  onClick={() => setConsoleTab(tab.id)}
+                >
+                  <Icon size={15} />
+                  <span>{tab.label}</span>
+                  {tab.count != null && <b>{tab.count}</b>}
+                </button>
+              );
+            })}
+          </nav>
+        )}
+
+        {activeUserId.startsWith("ambulance-") ? (
+          <section className="panel mission-panel">
+            <div className="panel-heading">
+              <h2>Crew Mission</h2>
+              {dashboardLoading && <Loader2 className="spin" size={16} />}
+            </div>
+            {missionData?.ambulance && (
+              <div className="mission-vehicle">
+                <div>
+                  <strong>{missionData.ambulance.call_sign}</strong>
+                  <span>{formatStatus(missionData.ambulance.status)}</span>
+                </div>
+                <Ambulance size={22} />
+              </div>
+            )}
+            {activeMission ? (
+              <>
+                <div className={`transfer-state ${transferProgressState(activeMission).className}`}>
+                  {transferProgressState(activeMission).label} / {formatStatus(activeMission.status)}
+                </div>
+                <div className="mission-route-card">
+                  <div className="mission-stop pickup">
+                    <span>Pickup</span>
+                    <strong>{missionPickupHospital}</strong>
+                  </div>
+                  <div className="mission-stop destination">
+                    <span>Dropoff</span>
+                    <strong>{missionDropoffHospital}</strong>
+                  </div>
+                </div>
+                <div className="mission-box">
+                  <div>
+                    <span>Urgency</span>
+                    <strong>{activeMission.urgency_class}</strong>
+                  </div>
+                  <div>
+                    <span>Required ICU</span>
+                    <strong>{activeMission.required_icu_type}</strong>
+                  </div>
+                  <div>
+                    <span>Route</span>
+                    <strong>
+                      {missionLegLabel}
+                      {activeMissionRoute?.estimated_minutes ? ` - ${activeMissionRoute.estimated_minutes} min` : ""}
+                      {activeMissionRoute?.distance_km ? ` / ${activeMissionRoute.distance_km} km` : ""}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Road risk</span>
+                    <strong>{activeMissionRoute?.risk_score?.toFixed(2) ?? "Fallback"}</strong>
+                  </div>
+                  <div>
+                    <span>OSM nodes</span>
+                    <strong>{activeMissionRoute?.route_nodes?.length ?? 0}</strong>
+                  </div>
+                </div>
+                <div className="mission-actions">
+                  {missionNextAction ? (
+                    <button type="button" className="primary-mission-action" onClick={() => missionAction(missionNextAction.action)}>
+                      <Navigation size={18} />
+                      {missionNextAction.label}
+                    </button>
+                  ) : (
+                    <button type="button" disabled>
+                      Mission Waiting
+                    </button>
+                  )}
+                  <div className={`telemetry-pill ${telemetryConnected ? "connected" : "reconnecting"}`}>
+                    <Activity size={16} />
+                    <span>{telemetryConnected ? "Live telemetry" : "Reconnecting telemetry"}</span>
+                  </div>
+                  {missionGoogleMapsUrl && (
+                    <a className="nav-link" href={missionGoogleMapsUrl} target="_blank" rel="noreferrer">
+                      <ExternalLink size={16} />
+                      Open Google Maps
+                    </a>
+                  )}
+                  <button type="button" className="secondary-action" onClick={() => void openTransferDetail(activeMission)}>
+                    Details
+                  </button>
+                </div>
+              </>
+            ) : (
+              returnRoute ? (
+                <div className="return-route-card">
+                  <span>Route to base hospital</span>
+                  <strong>{returnRoute.estimated_minutes ?? "-"} min / {returnRoute.distance_km ?? "-"} km</strong>
+                  <small>{returnRoute.route_nodes?.length ?? 0} OSM nodes - ambulance remains available</small>
+                </div>
+              ) : (
+                <div className="muted">No active mission assigned</div>
+              )
+            )}
+          </section>
+        ) : consoleTab === "transfer" ? (
+        <section className="panel">
+          <h2>Transfer Request</h2>
+          <div className="picker">
+            <span className="field-label">Origin hospital</span>
+            <button
+              type="button"
+              className="picker-trigger"
+              disabled={isHospitalAdmin}
+              onClick={() => setOriginPickerOpen((open) => !open)}
+            >
+              <HospitalIcon size={18} />
+              <span>{originHospital?.name ?? "Select hospital"}</span>
+              {!isHospitalAdmin && <ChevronDown size={17} />}
+            </button>
+            {isHospitalAdmin && <span className="helper-text">Hospital admins create transfers from their own hospital.</span>}
+            {originPickerOpen && !isHospitalAdmin && (
+              <div className="picker-menu compact">
+                {hospitals.map((hospital) => (
+                  <button
+                    type="button"
+                    className={hospital.id === originId ? "picker-option active" : "picker-option"}
+                    key={hospital.id}
+                    onClick={() => changeOrigin(hospital.id)}
+                  >
+                    {hospital.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <label>
+            Required ICU
+            <select value={requiredIcu} onChange={(event) => setRequiredIcu(event.target.value)}>
+              {icuOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="transfer-patient-card">
+            <h3>Patient Details</h3>
+            <label>
+              Patient name
+              <input value={transferPatientName} onChange={(event) => setTransferPatientName(event.target.value)} placeholder="Full name" />
+            </label>
+            <div className="field-grid">
+              <label>
+                Patient identifier
+                <input value={transferPatientIdentifier} onChange={(event) => setTransferPatientIdentifier(event.target.value)} placeholder="NIC / MRN / passport" />
+              </label>
+              <label>
+                Date of birth
+                <input value={transferPatientDob} onChange={(event) => setTransferPatientDob(event.target.value)} placeholder="YYYY-MM-DD" />
+              </label>
+            </div>
+            <div className="field-grid">
+              <label>
+                Age
+                <input value={transferPatientAge} onChange={(event) => setTransferPatientAge(event.target.value)} inputMode="numeric" placeholder="Age" />
+              </label>
+              <label>
+                Sex
+                <select value={transferPatientSex} onChange={(event) => setTransferPatientSex(event.target.value)}>
+                  <option value="unknown">Unknown</option>
+                  <option value="female">Female</option>
+                  <option value="male">Male</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+            </div>
+            <div className="field-grid">
+              <label>
+                Blood type
+                <input value={transferPatientBloodType} onChange={(event) => setTransferPatientBloodType(event.target.value)} placeholder="O+, A-" />
+              </label>
+              <label>
+                Emergency contact
+                <input value={transferPatientContact} onChange={(event) => setTransferPatientContact(event.target.value)} placeholder="Name / phone" />
+              </label>
+            </div>
+            <label>
+              Allergies / alerts
+              <input value={transferPatientAllergies} onChange={(event) => setTransferPatientAllergies(event.target.value)} placeholder="Known allergies, infection risks, special notes" />
+            </label>
+            <label>
+              Working diagnosis
+              <input value={transferPatientDiagnosis} onChange={(event) => setTransferPatientDiagnosis(event.target.value)} placeholder="Sepsis, polytrauma, STEMI..." />
+            </label>
+            <div className="field-grid">
+              <label>
+                Vitals
+                <input value={transferPatientVitals} onChange={(event) => setTransferPatientVitals(event.target.value)} placeholder="HR: 120, BP: 90/60, SpO2: 88" />
+              </label>
+              <label>
+                Medications
+                <input value={transferPatientMedications} onChange={(event) => setTransferPatientMedications(event.target.value)} placeholder="Noradrenaline, ceftriaxone" />
+              </label>
+            </div>
+            <div className="field-grid">
+              <label>
+                Infection risk
+                <select value={transferPatientInfectionRisk} onChange={(event) => setTransferPatientInfectionRisk(event.target.value)}>
+                  <option value="none">None</option>
+                  <option value="suspected">Suspected</option>
+                  <option value="confirmed">Confirmed</option>
+                  <option value="unknown">Unknown</option>
+                </select>
+              </label>
+              <label className="checkbox-line">
+                <input type="checkbox" checked={transferPatientIsolation} onChange={(event) => setTransferPatientIsolation(event.target.checked)} />
+                Isolation required
+              </label>
+            </div>
+          </div>
+          <label>
+            Patient condition
+            <select value={conditionType} onChange={(event) => setConditionType(event.target.value)}>
+              {conditionOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="field-grid">
+            <label>
+              Oxygen
+              <select value={oxygen} onChange={(event) => setOxygen(event.target.value)}>
+                {oxygenOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Blood pressure
+              <select value={bloodPressure} onChange={(event) => setBloodPressure(event.target.value)}>
+                {bloodPressureOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label>
+            Consciousness
+            <select value={consciousness} onChange={(event) => setConsciousness(event.target.value)}>
+              {consciousnessOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={ventilatorRequired}
+              onChange={(event) => setVentilatorRequired(event.target.checked)}
+            />
+            Ventilator required
+          </label>
+          <button type="button" onClick={recommendTransfer} disabled={loading || hospitals.length === 0}>
+            {loading ? <Loader2 className="spin" size={18} /> : <Route size={18} />}
+            Recommend Transfer
+          </button>
+        </section>
+        ) : null}
+
+        {error && (
+          <section className="status error">
+            <AlertCircle size={18} />
+            <span>{error}</span>
+          </section>
+        )}
+
+        {consoleTab === "transfer" && recommendationData && (
+          <section className="panel">
+            <div className="panel-heading">
+              <h2>Recommendations</h2>
+              <span className={`urgency ${recommendationData.urgency_class}`}>
+                {recommendationData.urgency_class} {recommendationData.urgency_score.toFixed(2)}
+              </span>
+            </div>
+            <div className="recommendation-list">
+              {recommendationData.recommendations.map((recommendation) => (
+                <div
+                  key={recommendation.destination_hospital_id}
+                  className={`recommendation ${
+                    recommendation.destination_hospital_id === selectedDestinationId ? "selected" : ""
+                  }`}
+                >
+                  <button type="button" className="rec-select" onClick={() => selectRecommendation(recommendation)}>
+                    <span className="rank">#{recommendation.rank}</span>
+                    <span className="rec-main">
+                    <strong>{recommendation.destination_name}</strong>
+                    <span>{recommendation.estimated_minutes.toFixed(1)} min ETA</span>
+                    </span>
+                    <span className="score">{recommendation.score.toFixed(3)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => createTransferFromRecommendation(recommendation)}
+                  >
+                    Request
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {!activeUserId.startsWith("ambulance-") && (
+        <section className="panel">
+          <div className="panel-heading">
+            <h2>{activeUserId === "super-admin" ? "Command Center" : "Hospital Dashboard"}</h2>
+            {dashboardLoading && <Loader2 className="spin" size={16} />}
+          </div>
+          {dashboardData ? (
+            <div className="dashboard-metrics">
+              <div>
+                <span>Available ICU Beds</span>
+                <strong>{hospitalBedAvailable}</strong>
+                <small>{hospitalBedTotal} total</small>
+              </div>
+              <div>
+                <span>Available Ambulances</span>
+                <strong>{ambulanceAvailable}</strong>
+                <small>{dashboardData.ambulances.length} total</small>
+              </div>
+              <div>
+                <span>Active Transfers</span>
+                <strong>{activeTransfers}</strong>
+                <small>{dashboardData.transfers.length} all requests</small>
+              </div>
+            </div>
+          ) : (
+            <div className="muted">Loading dashboard data...</div>
+          )}
+
+          {consoleTab === "requests" && activeUserId === "super-admin" ? (
+            <>
+              <h2>Transfer Command Queue</h2>
+              <div className="compact-list">
+                {dashboardData?.transfers.length
+                  ? dashboardData.transfers.map((transfer) => renderTransferCard(transfer, "command"))
+                  : <div className="muted">No transfer requests</div>}
+              </div>
+            </>
+          ) : consoleTab === "requests" ? (
+            <>
+              <h2>Incoming Requests</h2>
+              <div className="compact-list">
+                {incomingTransfers.length
+                  ? incomingTransfers.map((transfer) => renderTransferCard(transfer, "incoming"))
+                  : <div className="muted">No incoming transfer requests</div>}
+              </div>
+
+              <h2>Outgoing Transfers</h2>
+              <div className="compact-list">
+                {outgoingTransfers.length
+                  ? outgoingTransfers.map((transfer) => renderTransferCard(transfer, "outgoing"))
+                  : <div className="muted">No outgoing transfer requests</div>}
+              </div>
+            </>
+          ) : null}
+
+          {consoleTab === "fleet" && (
+            <>
+              <h2>Ambulance Pool</h2>
+              <div className="compact-list">
+                {dashboardData?.ambulances.length ? dashboardData.ambulances.map((ambulance) => (
+                  <div className="transfer-row" key={ambulance.id}>
+                    <div>
+                      <strong>{ambulance.call_sign}</strong>
+                      <span>{formatStatus(ambulance.status)} / base {ambulance.base_hospital_id ?? "central"}</span>
+                    </div>
+                    <select
+                      aria-label={`${ambulance.call_sign} status`}
+                      className="status-select"
+                      value={ambulance.status}
+                      onChange={(event) => updateAmbulanceStatus(ambulance, event.target.value)}
+                    >
+                      {ambulanceStatusOptions.map((status) => (
+                        <option key={status} value={status}>
+                          {formatStatus(status)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )) : <div className="muted">No ambulance data available</div>}
+              </div>
+            </>
+          )}
+        </section>
+        )}
+
+        {consoleTab === "transfer" && selectedDestinationId && (
+          <section className="panel">
+            <h2>Selected Route</h2>
+            {routeLoading && <div className="muted">Loading route...</div>}
+            {activeRoute && (
+              <>
+                <div className="metric-row">
+                  <span><Bed size={18} /> Available beds</span>
+                  <strong>{selectedDestination?.available_beds ?? "-"}</strong>
+                </div>
+                <div className="metric-row">
+                  <span><Route size={18} /> Estimated time</span>
+                  <strong>{activeRoute.estimated_minutes.toFixed(1)} min</strong>
+                </div>
+                <div className="metric-row">
+                  <span><ShieldCheck size={18} /> Route risk</span>
+                  <strong>{activeRoute.risk_score.toFixed(2)}</strong>
+                </div>
+                <div className="metric-row">
+                  <span><MapPin size={18} /> Source</span>
+                  <strong>{activeRoute.route_source?.replace(/_/g, " ")}</strong>
+                </div>
+                {!!activeRoute.route_nodes?.length && (
+                  <div className="metric-row">
+                    <span><Route size={18} /> OSM nodes</span>
+                    <strong>{activeRoute.route_nodes.length}</strong>
+                  </div>
+                )}
+                {!!activeRoute.risk_factors?.length && (
+                  <div className="route-explain">
+                    {activeRoute.risk_factors.slice(0, 4).map((factor) => (
+                      <span key={factor}>{factor}</span>
+                    ))}
+                  </div>
+                )}
+                {!!activeRoute.route_steps?.length && (
+                  <div className="route-step-list">
+                    {activeRoute.route_steps.slice(0, 4).map((step, index) => (
+                      <div key={`${step.start_index}-${step.end_index}-${index}`}>
+                        <strong>{step.instruction ?? `${formatManeuver(step.maneuver)} on ${step.road_name}`}</strong>
+                        <span>{Math.round(step.distance_meters)} m / risk {step.average_risk?.toFixed?.(2) ?? "-"}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
+      </aside>
+
+      <section className={`map-area ${ambulanceDriverMode ? "driver-mode" : ""}`}>
+        {!ambulanceDriverMode && (
+          <header className="map-command-bar">
+            <div className="map-command-title">
+              <span className="map-command-logo">
+                <ShieldCheck size={20} />
+              </span>
+              <div>
+                <strong>National ICU Command</strong>
+                <span>
+                  <i className={backendOnline ? "live-dot" : "live-dot offline"} />
+                  {backendOnline ? "Live network" : "Reconnecting"}
+                </span>
+              </div>
+            </div>
+            <nav className="map-command-tabs" aria-label="Command center views">
+              {mapCommandTabs.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <button
+                    type="button"
+                    className={mapCommandView === tab.id ? "active" : ""}
+                    key={tab.id}
+                    onClick={() => setMapCommandView(tab.id)}
+                    title={tab.label}
+                  >
+                    <Icon size={16} />
+                    <span>{tab.label}</span>
+                    {tab.id === "alerts" && criticalTransfers.length > 0 && (
+                      <b>{criticalTransfers.length}</b>
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="map-command-user">
+              <strong>{userLabel(activeUser)}</strong>
+              <span>{activeUser.role.replace(/_/g, " ")}</span>
+            </div>
+          </header>
+        )}
+
+        {!ambulanceDriverMode && mapCommandView !== "live" && (
+          <aside
+            className={`map-view-panel ${mapCommandView === "beds" ? "beds-view-panel" : ""} ${
+              mapCommandView === "analytics" ? "analytics-view-panel" : ""
+            }`}
+          >
+            <div className="map-view-head">
+              <div>
+                <span>Command view</span>
+                <h2>{mapCommandTabs.find((tab) => tab.id === mapCommandView)?.label}</h2>
+              </div>
+              <button type="button" title="Close panel" onClick={() => setMapCommandView("live")}>
+                <X size={17} />
+              </button>
+            </div>
+
+            {mapCommandView === "fleet" && (
+              <>
+                <div className="fleet-kpis">
+                  <div><strong>{fleetAvailable.length}</strong><span>Available</span></div>
+                  <div><strong>{fleetMoving.length}</strong><span>Moving</span></div>
+                  <div><strong>{fleetOffline.length}</strong><span>Offline</span></div>
+                </div>
+                <div className="command-list">
+                  {visibleAmbulances.map((ambulance) => (
+                    <div className="command-row" key={ambulance.id}>
+                      <span
+                        className="fleet-color"
+                        style={{ background: stableColor(ambulance.base_hospital_id ?? ambulance.id, hospitalMarkerColors) }}
+                      />
+                      <div>
+                        <strong>{ambulance.call_sign}</strong>
+                        <span>Base {hospitalName(ambulance.base_hospital_id ?? "")}</span>
+                      </div>
+                      <span className={`status-pill ${ambulance.status}`}>{formatStatus(ambulance.status)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {mapCommandView === "capacity" && (
+              <>
+                <div className="capacity-total">
+                  <div>
+                    <strong>{hospitalBedAvailable}</strong>
+                    <span>Available ICU beds</span>
+                  </div>
+                  <div>
+                    <strong>{occupancyPercent}%</strong>
+                    <span>Network occupancy</span>
+                  </div>
+                </div>
+                <div className="command-list">
+                  {dashboardData?.hospitals.map((hospital) => {
+                    const usedPercent = hospital.total_beds
+                      ? Math.round((hospital.occupied_beds / hospital.total_beds) * 100)
+                      : 0;
+                    return (
+                      <div className="capacity-row" key={hospital.id}>
+                        <div>
+                          <strong>{hospital.name}</strong>
+                          <span>{hospital.available_beds} available / {hospital.total_beds} total</span>
+                        </div>
+                        <div className="capacity-track">
+                          <span
+                            className={usedPercent >= 90 ? "critical" : usedPercent >= 75 ? "elevated" : ""}
+                            style={{ width: `${usedPercent}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {mapCommandView === "beds" && (
+              <>
+                <div className="fleet-kpis">
+                  <div><strong>{bedStatusCounts.available ?? 0}</strong><span>Available</span></div>
+                  <div><strong>{bedStatusCounts.occupied ?? 0}</strong><span>Occupied</span></div>
+                  <div><strong>{bedStatusCounts.transfer_assigned ?? 0}</strong><span>Transfers</span></div>
+                  <div><strong>{bedStatusCounts.reserved ?? 0}</strong><span>Reserved</span></div>
+                </div>
+
+                <section className="icu-layout-panel command-icu-layout">
+                  <div className="icu-layout-head">
+                    <div>
+                      <h2>ICU Digital Twin</h2>
+                      <span>{icuHospitalId ? hospitalName(icuHospitalId) : "Hospital"} floor plan and patient records</span>
+                    </div>
+                    <div className="bed-command-selectors">
+                      {activeUserId === "super-admin" && (
+                        <select value={bedViewHospitalId} onChange={(event) => changeBedViewHospital(event.target.value)}>
+                          {hospitals.map((hospital) => (
+                            <option key={hospital.id} value={hospital.id}>{hospital.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      <select value={dashboardData?.hospitals[0]?.icu_types[0] ?? requiredIcu} onChange={() => undefined}>
+                        <option>{dashboardData?.hospitals[0]?.icu_types[0] ?? "General ICU"}</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="icu-status-legend">
+                    {icuBedStatusOptions.map((status) => (
+                      <span className={`bed-legend ${status}`} key={status}>
+                        <i />
+                        {formatStatus(status)} ({bedStatusCounts[status] ?? 0})
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="icu-floor-shell">
+                    <div className="icu-entrance">Entrance</div>
+                    <div className="icu-ward-label">Ward A</div>
+                    <div className="icu-bed-grid">
+                      {icuBeds.map((bed) => (
+                        <button
+                          type="button"
+                          className={`icu-bed ${bed.status} ${bed.id === selectedBedId ? "selected" : ""}`}
+                          key={bed.id}
+                          onClick={() => {
+                            setBedEditorDirty(false);
+                            setSelectedBedId(bed.id);
+                          }}
+                        >
+                          <span className="bed-light" />
+                          <span className="bed-pillow" />
+                          <strong>{bed.bed_no}</strong>
+                          <small>{bed.patient?.patient_no ?? "No patient"}</small>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="nurse-station">Nurse Station</div>
+                    <div className="isolation-zone">Isolation</div>
+                  </div>
+
+                  {selectedIcuBed && (
+                    <div className="bed-detail-editor command-bed-editor">
+                      <div>
+                        <span>Selected bed</span>
+                        <strong>{selectedIcuBed.bed_no}</strong>
+                        <small>{selectedIcuBed.patient ? selectedIcuBed.patient.patient_no : "Available for admission"}</small>
+                      </div>
+                      <label>
+                        Status
+                        <select value={bedStatus} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedStatus(event.target.value);
+                        }}>
+                          {icuBedStatusOptions.map((status) => (
+                            <option key={status} value={status}>{formatStatus(status)}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Patient no
+                        <input value={bedPatientNo} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientNo(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Identifier
+                        <input value={bedPatientIdentifier} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientIdentifier(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Patient name
+                        <input value={bedPatientName} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientName(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Date of birth
+                        <input value={bedPatientDob} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientDob(event.target.value);
+                        }} placeholder="YYYY-MM-DD" />
+                      </label>
+                      <label>
+                        Age
+                        <input value={bedPatientAge} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientAge(event.target.value);
+                        }} inputMode="numeric" />
+                      </label>
+                      <label>
+                        Sex
+                        <select value={bedPatientSex} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientSex(event.target.value);
+                        }}>
+                          <option value="">Unknown</option>
+                          <option value="female">Female</option>
+                          <option value="male">Male</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </label>
+                      <label>
+                        Blood type
+                        <input value={bedPatientBloodType} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientBloodType(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Condition
+                        <input value={bedPatientCondition} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientCondition(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Diagnosis
+                        <input value={bedPatientDiagnosis} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientDiagnosis(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Vitals
+                        <input value={bedPatientVitals} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientVitals(event.target.value);
+                        }} placeholder="HR: 90, BP: 120/80" />
+                      </label>
+                      <label>
+                        Medications
+                        <input value={bedPatientMedications} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientMedications(event.target.value);
+                        }} placeholder="comma separated" />
+                      </label>
+                      <label>
+                        Alerts
+                        <input value={bedPatientAllergies} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientAllergies(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Infection risk
+                        <input value={bedPatientInfectionRisk} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientInfectionRisk(event.target.value);
+                        }} />
+                      </label>
+                      <label className="checkbox-line">
+                        <input type="checkbox" checked={bedPatientIsolation} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientIsolation(event.target.checked);
+                        }} />
+                        Isolation required
+                      </label>
+                      <label>
+                        Emergency contact
+                        <input value={bedPatientContact} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientContact(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Next of kin
+                        <input value={bedPatientNextOfKin} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientNextOfKin(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Address
+                        <input value={bedPatientAddress} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientAddress(event.target.value);
+                        }} />
+                      </label>
+                      <label>
+                        Notes
+                        <input value={bedPatientNotes} onChange={(event) => {
+                          setBedEditorDirty(true);
+                          setBedPatientNotes(event.target.value);
+                        }} />
+                      </label>
+                      <button type="button" className="secondary-action" onClick={saveSelectedBed}>
+                        Save Bed
+                      </button>
+                      <button type="button" className="secondary-action danger" onClick={clearSelectedBed}>
+                        Remove Patient
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="patient-table command-patient-table">
+                    <div className="patient-census-title">
+                      <strong>{activeUserId === "super-admin" ? "Network ICU Patient Census" : "Hospital ICU Patient Census"}</strong>
+                      <span>{occupiedIcuBeds.length} active patient records</span>
+                    </div>
+                    <div className="patient-table-head">
+                      <strong>Hospital / Bed</strong>
+                      <strong>Patient / Identifier</strong>
+                      <strong>Demographics</strong>
+                      <strong>Clinical / Vitals</strong>
+                      <strong>Treatment / Safety</strong>
+                      <strong>Contact / Address</strong>
+                      <strong>Admission / Status</strong>
+                    </div>
+                    {occupiedIcuBeds.length ? occupiedIcuBeds.map((bed) => (
+                      <button type="button" className="patient-row" key={bed.id} onClick={() => void selectCensusBed(bed)}>
+                        <span><strong>{hospitalName(bed.hospital_id)}</strong><small>{bed.ward} / {bed.bed_no} / {bed.icu_type}</small></span>
+                        <span><strong>{bed.patient?.patient_name ?? "Record pending"}</strong><small>{bed.patient?.patient_no ?? "No MRN"} / {bed.patient?.identifier_value ?? "No identifier"}</small></span>
+                        <span><strong>{bed.patient?.age ?? "-"} yrs / {bed.patient?.sex ?? "-"} / {bed.patient?.blood_type ?? "-"}</strong><small>DOB {bed.patient?.date_of_birth ?? "Not recorded"}</small></span>
+                        <span>
+                          <strong>{bed.patient?.diagnosis || bed.patient?.condition || "-"}</strong>
+                          <small>{bed.patient?.condition ?? "Condition pending"} / {formatVitals(bed.patient?.vitals) || "Vitals not recorded"}</small>
+                        </span>
+                        <span>
+                          <strong>{bed.patient?.medications?.join(", ") || "No medication recorded"}</strong>
+                          <small>
+                            {[
+                              bed.patient?.allergies ? `Alerts: ${bed.patient.allergies}` : "",
+                              bed.patient?.infection_risk ? `Infection: ${bed.patient.infection_risk}` : "",
+                              bed.patient?.isolation_required ? "Isolation" : "",
+                            ].filter(Boolean).join(" / ") || "No alerts recorded"}
+                          </small>
+                        </span>
+                        <span><strong>{bed.patient?.emergency_contact ?? "Not recorded"}</strong><small>{bed.patient?.next_of_kin ?? "No next of kin"} / {bed.patient?.address ?? "No address"}</small></span>
+                        <span><strong>{formatStatus(bed.status)}</strong><small>{bed.patient?.admitted_at ? new Date(bed.patient.admitted_at).toLocaleString() : "Admission pending"} / {bed.patient?.notes ?? "No notes"}</small></span>
+                      </button>
+                    )) : (
+                      <div className="muted">No patients currently assigned to ICU beds</div>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
+
+            {mapCommandView === "transfers" && (
+              <div className="command-list">
+                {dashboardData?.transfers.length ? (
+                  dashboardData.transfers.map((transfer) => (
+                    <button
+                      type="button"
+                      className="transfer-command-row"
+                      key={transfer.id}
+                      onClick={() => void openTransferDetail(transfer)}
+                    >
+                      <div>
+                        <strong>{hospitalName(transfer.origin_hospital_id)} to {hospitalName(transfer.destination_hospital_id)}</strong>
+                        <span>{transfer.required_icu_type} / {formatStatus(transfer.status)}</span>
+                      </div>
+                      <span className={`urgency ${transfer.urgency_class}`}>{transfer.urgency_class}</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="empty-command-state">No transfer requests</div>
+                )}
+              </div>
+            )}
+
+            {mapCommandView === "analytics" && (
+              <>
+                <div className="analytics-grid">
+                  <div><span>Network occupancy</span><strong>{occupancyPercent}%</strong></div>
+                  <div><span>Fleet readiness</span><strong>{visibleAmbulances.length ? Math.round((fleetAvailable.length / visibleAmbulances.length) * 100) : 0}%</strong></div>
+                  <div><span>Active transfers</span><strong>{activeTransfers}</strong></div>
+                  <div><span>Critical queue</span><strong>{criticalTransfers.length}</strong></div>
+                </div>
+                <h3>Hospital capacity comparison</h3>
+                <div className="analytics-bars">
+                  {dashboardData?.hospitals.map((hospital) => (
+                    <div key={hospital.id}>
+                      <span>{hospitalCode(hospital.name)}</span>
+                      <div><i style={{ width: `${hospital.total_beds ? (hospital.available_beds / hospital.total_beds) * 100 : 0}%` }} /></div>
+                      <strong>{hospital.available_beds}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="prediction-strip">
+                  <BarChart3 size={20} />
+                  <div>
+                    <strong>Predictive ICU capacity</strong>
+                    <span>{capacityForecast?.network_recommended_action ?? "Loading forecast..."}</span>
+                  </div>
+                </div>
+                {capacityForecast && (
+                  <>
+                    <div className={`forecast-summary ${capacityForecast.network_pressure_level}`}>
+                      <div>
+                        <span>Network pressure</span>
+                        <strong>{formatStatus(capacityForecast.network_pressure_level)}</strong>
+                      </div>
+                      <div>
+                        <span>Peak occupancy risk</span>
+                        <strong>{Math.round(capacityForecast.network_pressure_score * 100)}%</strong>
+                      </div>
+                      <div>
+                        <span>Most pressured</span>
+                        <strong>{mostPressuredForecast?.hospital_name ?? "-"}</strong>
+                      </div>
+                    </div>
+                    <div className="forecast-list">
+                      {forecastHospitals.slice(0, 6).map((forecast) => (
+                        <div className="forecast-row" key={forecast.hospital_id}>
+                          <div>
+                            <strong>{forecast.hospital_name}</strong>
+                            <span>{forecast.current_available_beds} now / {forecast.inbound_transfers} inbound / {forecast.expected_discharges_12h} expected releases</span>
+                          </div>
+                          <div className="forecast-horizons">
+                            {forecast.points.map((point) => (
+                              <span className={point.pressure_level} key={point.horizon_hours}>
+                                {point.horizon_hours}h: {point.predicted_available_beds}
+                              </span>
+                            ))}
+                          </div>
+                          <small>{forecast.recommended_action}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <section className="simulation-panel">
+                  <div className="simulation-head">
+                    <div>
+                      <h3>Scenario simulation</h3>
+                      <span>Read-only operational stress test</span>
+                    </div>
+                    <button type="button" onClick={() => void runSimulation()} disabled={simulationLoading}>
+                      {simulationLoading ? <Loader2 size={15} className="spin" /> : <BarChart3 size={15} />}
+                      Run
+                    </button>
+                  </div>
+                  <div className="simulation-controls">
+                    <label>
+                      Scenario
+                      <select value={simulationScenario} onChange={(event) => setSimulationScenario(event.target.value)}>
+                        {simulationScenarioOptions.map((option) => (
+                          <option value={option.id} key={option.id}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Hours
+                      <input
+                        type="number"
+                        min="1"
+                        max="24"
+                        value={simulationHours}
+                        onChange={(event) => setSimulationHours(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Intensity
+                      <input
+                        type="number"
+                        min="0.25"
+                        max="3"
+                        step="0.25"
+                        value={simulationIntensity}
+                        onChange={(event) => setSimulationIntensity(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  {simulationData ? (
+                    <>
+                      <div className={`simulation-action ${simulationData.network_pressure_level}`}>
+                        <strong>{simulationData.scenario_label}</strong>
+                        <span>{simulationData.recommended_action}</span>
+                      </div>
+                      <div className="simulation-kpis">
+                        <div><span>Transfers</span><strong>{simulationData.simulated_transfers}</strong></div>
+                        <div><span>Critical</span><strong>{simulationData.critical_transfers}</strong></div>
+                        <div><span>Ambulance gap</span><strong>{simulationData.ambulance_gap}</strong></div>
+                        <div><span>Bed shortage</span><strong>{simulationData.total_shortage_beds}</strong></div>
+                      </div>
+                      <div className="simulation-impact-list">
+                        {simulationImpacts.slice(0, 5).map((impact) => (
+                          <div className="simulation-impact-row" key={impact.hospital_id}>
+                            <div>
+                              <strong>{impact.hospital_name}</strong>
+                              <span>
+                                {impact.projected_arrivals} arrivals / {impact.projected_releases} releases / {impact.predicted_available_beds} beds after scenario
+                              </span>
+                            </div>
+                            <span className={`pressure-chip ${impact.pressure_level}`}>
+                              {formatStatus(impact.pressure_level)}
+                            </span>
+                            <small>{impact.recommended_action}</small>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="empty-command-state">Run a scenario to see simulated ICU and fleet pressure</div>
+                  )}
+                </section>
+              </>
+            )}
+
+            {mapCommandView === "alerts" && (
+              <div className="command-list">
+                <div className={`alert-command-row ${backendOnline ? "success" : "critical"}`}>
+                  <Activity size={18} />
+                  <div>
+                    <strong>{backendOnline ? "Hospital network connected" : "Hospital network reconnecting"}</strong>
+                    <span>{backendOnline ? "Live updates are operational." : "Actions are temporarily unavailable."}</span>
+                  </div>
+                </div>
+                {criticalTransfers.map((transfer) => (
+                  <button
+                    type="button"
+                    className="alert-command-row critical"
+                    key={transfer.id}
+                    onClick={() => void openTransferDetail(transfer)}
+                  >
+                    <Siren size={18} />
+                    <div>
+                      <strong>Critical transfer in progress</strong>
+                      <span>{hospitalName(transfer.origin_hospital_id)} to {hospitalName(transfer.destination_hospital_id)}</span>
+                    </div>
+                  </button>
+                ))}
+                {fleetOffline.length > 0 && (
+                  <div className="alert-command-row warning">
+                    <Ambulance size={18} />
+                    <div>
+                      <strong>{fleetOffline.length} ambulances offline</strong>
+                      <span>Fleet simulation is maintaining reserve coverage.</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </aside>
+        )}
+
+        {!ambulanceDriverMode && (
+          <div className="map-live-legend">
+            <span><i className="available" /> {fleetAvailable.length} available</span>
+            <span><i className="moving" /> {fleetMoving.length} moving</span>
+            <span><i className="offline" /> {fleetOffline.length} offline</span>
+          </div>
+        )}
+
+        {activeUserId.startsWith("ambulance-") && crewDisplayedRoute && (crewDisplayedRoute.polyline?.length ?? 0) >= 2 && (
+          <div className="driver-nav-banner">
+            <div className="driver-nav-instruction">
+              <span>{missionLegLabel}</span>
+              <strong>{navigationInstruction?.instructionText ?? "Follow highlighted route"}</strong>
+              {navigationInstruction?.detailText && <small>{navigationInstruction.detailText}</small>}
+            </div>
+            <div>
+              <span>Heading</span>
+              <strong>{navigationInstruction ? navigationInstruction.direction : "-"}</strong>
+            </div>
+            <div>
+              <span>ETA</span>
+              <strong>{navigationInstruction ? `${Math.max(1, Math.ceil(navigationInstruction.etaMinutes))} min` : "-"}</strong>
+            </div>
+            <div>
+              <span>Speed / Risk</span>
+              <strong>{navigationInstruction ? `${Math.round(navigationInstruction.speedKph)} km/h` : "-"} / {crewDisplayedRoute.risk_score?.toFixed(2) ?? "-"}</strong>
+            </div>
+            <div className="driver-nav-progress" aria-label="Route progress">
+              <span style={{ width: `${navigationInstruction?.progressPercent ?? 0}%` }} />
+            </div>
+          </div>
+        )}
+
+        {ambulanceDriverMode && missionData?.ambulance && crewDisplayedRoute && (crewDisplayedRoute.polyline?.length ?? 0) >= 2 ? (
+          <Suspense fallback={<div className="map-loading-panel">Loading 3D navigation...</div>}>
+            <ThreeDNavigationMap
+              ambulance={missionData.ambulance}
+              route={crewDisplayedRoute}
+              hospitals={hospitals}
+              legLabel={missionLegLabel}
+              color={stableColor(missionData.ambulance.base_hospital_id ?? missionData.ambulance.id, hospitalMarkerColors)}
+            />
+          </Suspense>
+        ) : (
+          <MapContainer center={[6.906, 79.871]} zoom={13} className="map">
+            <MapNavigationController
+              ambulance={missionData?.ambulance}
+              route={crewDisplayedRoute}
+              driverMode={ambulanceDriverMode}
+              focusKey={`${activeMission?.id ?? "return"}-${activeMission?.status ?? "base"}-${crewDisplayedRoute?.polyline?.length ?? 0}`}
+            />
+            <TileLayer
+              attribution="&copy; OpenStreetMap contributors"
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            {hospitals.map((hospital) => {
+              const isOrigin = originHospital?.id === hospital.id;
+              const isSelected = selectedDestinationId === hospital.id;
+              const hospitalColor = stableColor(hospital.id, hospitalMarkerColors);
+              return (
+                <CircleMarker
+                  key={hospital.id}
+                  center={[hospital.latitude, hospital.longitude]}
+                  radius={isOrigin || isSelected ? 9 : 6}
+                  pathOptions={{
+                    color: isOrigin ? "#071a2f" : isSelected ? "#d64545" : "#ffffff",
+                    fillColor: hospitalColor,
+                    fillOpacity: 0.9,
+                    weight: isOrigin || isSelected ? 4 : 2,
+                  }}
+                >
+                  <Popup>
+                    <strong>{hospital.name}</strong>
+                    <br />
+                    ICU: {hospital.icu_types.join(", ")}
+                    <br />
+                    Available beds: {hospital.available_beds}
+                    <br />
+                    Location: {hospital.latitude.toFixed(6)}, {hospital.longitude.toFixed(6)}
+                  </Popup>
+                </CircleMarker>
+              );
+            })}
+            {displayedRouteLine.length > 0 && (
+              <>
+                {ambulanceDriverMode && (
+                  <Polyline positions={displayedRouteLine} pathOptions={{ color: "#06172a", opacity: 0.45, weight: 11 }} />
+                )}
+                <Polyline
+                  positions={displayedRouteLine}
+                  pathOptions={{
+                    color: activeUserId.startsWith("ambulance-") ? "#12b981" : activeMission ? "#0b7a75" : "#d64545",
+                    opacity: activeUserId.startsWith("ambulance-") ? 0.96 : 0.88,
+                    weight: ambulanceDriverMode ? 7 : 5,
+                  }}
+                />
+              </>
+            )}
+            {visibleAmbulances.map((ambulance) => (
+              <Marker
+                key={ambulance.id}
+                position={[ambulance.latitude, ambulance.longitude]}
+                icon={ambulanceMarkerIcon(ambulance)}
+              >
+                <Popup>
+                  <strong>{ambulance.call_sign}</strong>
+                  <br />
+                  Status: {formatStatus(ambulance.status)}
+                  <br />
+                  Base: {ambulance.base_hospital_id ?? "central"}
+                  <br />
+                  Location: {ambulance.latitude.toFixed(6)}, {ambulance.longitude.toFixed(6)}
+                </Popup>
+              </Marker>
+            ))}
+          </MapContainer>
+        )}
+      </section>
+
+      {blockingModal && (
+        <div className="blocking-overlay" role="dialog" aria-modal="true" aria-labelledby="blocking-modal-title">
+          <div className={`blocking-modal ${blockingModal.tone ?? "info"}`}>
+            <div className="blocking-icon">
+              {blockingModal.tone === "success" ? <Check size={26} /> : <AlertCircle size={26} />}
+            </div>
+            <div>
+              <h2 id="blocking-modal-title">{blockingModal.title}</h2>
+              <p>{blockingModal.message}</p>
+            </div>
+            <div className="blocking-actions">
+              {blockingModal.cancelLabel && (
+                <button type="button" className="secondary-action" onClick={blockingModal.onCancel}>
+                  {blockingModal.cancelLabel}
+                </button>
+              )}
+              <button type="button" onClick={() => void blockingModal.onConfirm?.()}>
+                {blockingModal.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedTransferDetail && (
+        <div className="detail-overlay" role="dialog" aria-modal="true" aria-labelledby="transfer-detail-title">
+          <section className="detail-panel">
+            <div className="detail-head">
+              <div>
+                <h2 id="transfer-detail-title">Transfer Detail</h2>
+                <p>{`${hospitalName(selectedTransferDetail.origin_hospital_id)} -> ${hospitalName(selectedTransferDetail.destination_hospital_id)}`}</p>
+              </div>
+              <button type="button" className="secondary-action" onClick={closeTransferDetail}>
+                Close
+              </button>
+            </div>
+
+            <div className="detail-grid">
+              <div>
+                <span>Status</span>
+                <strong>{formatStatus(selectedTransferDetail.status)}</strong>
+              </div>
+              <div>
+                <span>Urgency</span>
+                <strong>{selectedTransferDetail.urgency_class}</strong>
+              </div>
+              <div>
+                <span>Required ICU</span>
+                <strong>{selectedTransferDetail.required_icu_type}</strong>
+              </div>
+              <div>
+                <span>Ambulance</span>
+                <strong>{selectedTransferDetail.ambulance_id ?? "Not assigned"}</strong>
+              </div>
+              <div>
+                <span>Assigned bed</span>
+                <strong>{selectedTransferDetail.assigned_bed_id ? (icuBeds.find((bed) => bed.id === selectedTransferDetail.assigned_bed_id)?.bed_no ?? selectedTransferDetail.assigned_bed_id) : "Not assigned"}</strong>
+              </div>
+            </div>
+
+            {selectedDispatch && (
+              <>
+                <h3>Dispatch Decision</h3>
+                <div className="detail-grid">
+                  <div>
+                    <span>Model</span>
+                    <strong>{selectedDispatch.model ?? "dispatch model"}</strong>
+                  </div>
+                  <div>
+                    <span>Score</span>
+                    <strong>{selectedDispatch.score?.toFixed?.(2) ?? "-"}</strong>
+                  </div>
+                  <div>
+                    <span>Pickup ETA</span>
+                    <strong>{selectedDispatch.estimated_pickup_minutes ?? "-"} min</strong>
+                  </div>
+                  <div>
+                    <span>Pickup risk</span>
+                    <strong>{selectedDispatch.pickup_risk_score?.toFixed?.(2) ?? "-"}</strong>
+                  </div>
+                  <div>
+                    <span>Coverage impact</span>
+                    <strong>{selectedDispatch.coverage_penalty?.toFixed?.(2) ?? "-"}</strong>
+                  </div>
+                </div>
+                {selectedDispatch.explanation?.length ? (
+                  <div className="dispatch-reasons">
+                    {selectedDispatch.explanation.map((reason) => (
+                      <span key={reason}>{reason}</span>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            )}
+
+            <h3>Patient Packet</h3>
+            <div className="detail-grid">
+              <div>
+                <span>Name</span>
+                <strong>{selectedTransferDetail.patient_name ?? "Unnamed patient"}</strong>
+              </div>
+              <div>
+                <span>Identifier</span>
+                <strong>{selectedTransferDetail.patient_identifier_value ?? "-"}</strong>
+              </div>
+              <div>
+                <span>Age / sex</span>
+                <strong>{selectedTransferDetail.patient_age ?? "-"} / {selectedTransferDetail.patient_sex ?? "-"}</strong>
+              </div>
+              <div>
+                <span>Date of birth</span>
+                <strong>{selectedTransferDetail.patient_date_of_birth ?? "-"}</strong>
+              </div>
+              <div>
+                <span>Blood type</span>
+                <strong>{selectedTransferDetail.patient_blood_type ?? "-"}</strong>
+              </div>
+              <div>
+                <span>Condition</span>
+                <strong>{selectedTransferDetail.patient_condition}</strong>
+              </div>
+              <div>
+                <span>Diagnosis</span>
+                <strong>{selectedTransferDetail.patient_diagnosis ?? "-"}</strong>
+              </div>
+              <div>
+                <span>Vitals</span>
+                <strong>{formatVitals(selectedTransferDetail.patient_vitals) || "-"}</strong>
+              </div>
+              <div>
+                <span>Medications</span>
+                <strong>{selectedTransferDetail.patient_medications?.length ? selectedTransferDetail.patient_medications.join(", ") : "-"}</strong>
+              </div>
+              <div>
+                <span>Allergies / alerts</span>
+                <strong>{selectedTransferDetail.patient_allergies ?? "None recorded"}</strong>
+              </div>
+              <div>
+                <span>Infection / isolation</span>
+                <strong>{selectedTransferDetail.patient_infection_risk ?? "none"} / {selectedTransferDetail.patient_isolation_required ? "isolation required" : "no isolation"}</strong>
+              </div>
+              <div>
+                <span>Emergency contact</span>
+                <strong>{selectedTransferDetail.patient_emergency_contact ?? "-"}</strong>
+              </div>
+            </div>
+
+            <h3>Event Timeline</h3>
+            {eventsLoading ? (
+              <div className="muted">Loading timeline...</div>
+            ) : transferEvents.length ? (
+              <div className="event-list">
+                {transferEvents.map((event) => {
+                  const details = parseEventDetails(event.details_json);
+                  return (
+                    <div className="event-row" key={event.id}>
+                      <div className="event-dot" />
+                      <div>
+                        <strong>{formatStatus(event.event_type)}</strong>
+                        <span>{event.message}</span>
+                        <small>
+                          {formatDateTime(event.created_at)}
+                          {event.actor_user_id ? ` / ${event.actor_user_id}` : ""}
+                          {` / ${formatStatus(event.status)}`}
+                        </small>
+                        {details.length > 0 && (
+                          <ul>
+                            {details.slice(0, 6).map((detail) => (
+                              <li key={detail}>{detail}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="muted">No timeline events recorded</div>
+            )}
+          </section>
+        </div>
+      )}
+    </main>
+  );
+}
+
+export default App;

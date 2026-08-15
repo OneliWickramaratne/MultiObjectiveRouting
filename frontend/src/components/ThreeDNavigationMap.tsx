@@ -254,6 +254,13 @@ export function ThreeDNavigationMap({ ambulance, route, hospitals, legLabel, col
   const stopMarkersRef = useRef<Marker[]>([]);
   const frameRef = useRef<number | null>(null);
   const followingRef = useRef(true);
+  // Remembers which leg (e.g. "Returning to base") the camera has already
+  // been framed for. A return-to-base route is recomputed fresh from the
+  // ambulance's current position on every poll, so its polyline naturally
+  // shrinks/shifts each time even though it's logically the same trip —
+  // without this guard, fitBounds would re-fire every poll and cause a
+  // visible zoom-out/zoom-in jitter instead of smoothly following.
+  const lastFitLegRef = useRef<string | null>(null);
   const northUpRef = useRef(false);
   const routeTrackRef = useRef<RouteTrack | null>(null);
   const overviewUntilRef = useRef(0);
@@ -397,14 +404,18 @@ export function ThreeDNavigationMap({ ambulance, route, hospitals, legLabel, col
           .setLngLat(allCoordinates[allCoordinates.length - 1] as [number, number])
           .addTo(map),
       ];
-      const bounds = allCoordinates.reduce(
-        (current, coordinate) => current.extend(coordinate as [number, number]),
-        new LngLatBounds(allCoordinates[0] as [number, number], allCoordinates[0] as [number, number]),
-      );
-      overviewUntilRef.current = performance.now() + 900;
-      map.fitBounds(bounds, { padding: { top: 120, right: 90, bottom: 180, left: 90 }, maxZoom: 17.4, duration: 650 });
-      followingRef.current = true;
-      setIsFollowing(true);
+      const isNewLeg = lastFitLegRef.current !== legLabel;
+      if (isNewLeg) {
+        const bounds = allCoordinates.reduce(
+          (current, coordinate) => current.extend(coordinate as [number, number]),
+          new LngLatBounds(allCoordinates[0] as [number, number], allCoordinates[0] as [number, number]),
+        );
+        overviewUntilRef.current = performance.now() + 900;
+        map.fitBounds(bounds, { padding: { top: 120, right: 90, bottom: 180, left: 90 }, maxZoom: 17.4, duration: 650 });
+        followingRef.current = true;
+        setIsFollowing(true);
+        lastFitLegRef.current = legLabel;
+      }
     };
     if (map.isStyleLoaded()) {
       applyRoute();

@@ -1438,6 +1438,7 @@
   position: relative;
   height: 100%;
   width: 100%;
+  isolation: isolate;
 }
 
 .driver-overlay {
@@ -1712,4 +1713,56 @@
   padding: 5px 10px;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+/* ---------- Language switcher ---------- */
+
+.language-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+
+.language-switcher-select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.language-switcher-select.compact {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+/* ---------- Driver map 2D/3D toggle ---------- */
+
+.map-mode-toggle {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 10000;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(13, 36, 54, 0.9);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+
+.map-mode-toggle:hover {
+  background: rgba(13, 36, 54, 1);
 }

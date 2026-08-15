@@ -3,11 +3,8 @@ import { Bed, DoorOpen, ShieldAlert, UserRound, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { icuBedStatusOptions } from "../lib/constants";
 import { useAuth } from "../state/AuthContext";
+import { useLanguage } from "../i18n/LanguageContext";
 import type { IcuBed } from "../types";
-
-function formatStatus(status: string) {
-  return status.replace(/_/g, " ");
-}
 
 function parseVitalsText(value: string) {
   const vitals: Record<string, string> = {};
@@ -57,6 +54,7 @@ const emptyForm = {
 
 export function IcuBedsPage() {
   const { user, hospitals } = useAuth();
+  const { t } = useLanguage();
   const isSuperAdmin = user?.role === "super_admin";
   const [hospitalId, setHospitalId] = useState(user?.hospital_id ?? hospitals[0]?.id ?? "");
   const [icuTypeFilter, setIcuTypeFilter] = useState("all");
@@ -65,6 +63,10 @@ export function IcuBedsPage() {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  function statusLabel(status: string) {
+    return (t.enums.bedStatus as Record<string, string>)[status] ?? status.split("_").join(" ");
+  }
 
   async function loadBeds(id: string) {
     setLoading(true);
@@ -126,12 +128,12 @@ export function IcuBedsPage() {
       key !== "status" ? (typeof value === "string" ? value.trim().length > 0 : value) : false,
     );
     if (hasDraft && !form.patientName.trim()) {
-      setError("Enter a patient name before assigning this bed.");
+      setError(t.icuBeds.enterPatientNameFirst);
       return;
     }
     const parsedAge = form.age.trim() ? Number(form.age) : undefined;
     if (parsedAge !== undefined && (!Number.isFinite(parsedAge) || parsedAge < 0 || parsedAge > 130)) {
-      setError("Enter a valid age (0-130) before saving.");
+      setError(t.icuBeds.enterValidAge);
       return;
     }
     const payload = hasDraft
@@ -216,22 +218,22 @@ export function IcuBedsPage() {
       <div className="metric-grid">
         {icuBedStatusOptions.slice(0, 4).map((status) => (
           <div key={status} className={`metric-card spine tone-${bedTone(status)}`}>
-            <div className="label"><span className="icon-chip"><Bed size={15} /></span> {formatStatus(status)}</div>
+            <div className="label"><span className="icon-chip"><Bed size={15} /></span> {statusLabel(status)}</div>
             <div className="value">{counts[status] ?? 0}</div>
           </div>
         ))}
       </div>
 
       <div className="section-head" style={{ marginTop: 0 }}>
-        <h3>ICU wards{loading ? " · loading…" : ""}</h3>
+        <h3>{t.icuBeds.icuWardsHeading}{loading ? ` · ${t.icuBeds.loadingSuffix}` : ""}</h3>
         <div style={{ display: "flex", gap: 8 }}>
           <select
             value={icuTypeFilter}
             onChange={(e) => setIcuTypeFilter(e.target.value)}
             style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}
           >
-            <option value="all">All ICU types</option>
-            {icuTypesAtHospital.map((t) => <option key={t} value={t}>{t}</option>)}
+            <option value="all">{t.icuBeds.allIcuTypes}</option>
+            {icuTypesAtHospital.map((icuType) => <option key={icuType} value={icuType}>{icuType}</option>)}
           </select>
           {isSuperAdmin && (
             <select
@@ -245,13 +247,13 @@ export function IcuBedsPage() {
         </div>
       </div>
 
-      {wardGroups.length === 0 && !loading && <div className="card empty-state">No ICU beds found for this selection.</div>}
+      {wardGroups.length === 0 && !loading && <div className="card empty-state">{t.icuBeds.noIcuBeds}</div>}
 
       {wardGroups.map(([ward, wardBeds]) => (
         <div key={ward} className="ward-panel">
           <div className="ward-panel-head">
             <strong>{ward}</strong>
-            <span className="ward-panel-meta">{wardBeds[0]?.icu_type} · {wardBeds.length} beds</span>
+            <span className="ward-panel-meta">{wardBeds[0]?.icu_type} · {wardBeds.length} {t.icuBeds.beds}</span>
           </div>
 
           <div className="ward-room">
@@ -262,7 +264,7 @@ export function IcuBedsPage() {
                   type="button"
                   className={`bed-unit tone-${bedTone(bed.status)}`}
                   onClick={() => openBed(bed)}
-                  title={bed.patient?.patient_name ?? "No patient"}
+                  title={bed.patient?.patient_name ?? t.icuBeds.noPatient}
                 >
                   {bed.patient?.isolation_required && (
                     <span className="bed-isolation-badge"><ShieldAlert size={10} /></span>
@@ -273,15 +275,15 @@ export function IcuBedsPage() {
                     <span className="bed-unit-no">{bed.bed_no}</span>
                     {bed.patient ? <UserRound size={13} /> : null}
                   </span>
-                  <span className="bed-unit-label">{formatStatus(bed.status)}</span>
+                  <span className="bed-unit-label">{statusLabel(bed.status)}</span>
                 </button>
               ))}
             </div>
 
             <div className="ward-corridor">
-              <span className="ward-door"><DoorOpen size={16} /> Entrance</span>
+              <span className="ward-door"><DoorOpen size={16} /> {t.icuBeds.entrance}</span>
               <span className="ward-corridor-line" />
-              <span className="ward-nurse-station"><UserRound size={13} /> Nurse station</span>
+              <span className="ward-nurse-station"><UserRound size={13} /> {t.icuBeds.nurseStation}</span>
             </div>
           </div>
         </div>
@@ -292,7 +294,7 @@ export function IcuBedsPage() {
           <aside className="drawer-panel" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <div>
-                <h2>Bed {selectedBed.bed_no}</h2>
+                <h2>{t.icuBeds.bedPrefix} {selectedBed.bed_no}</h2>
                 <p>{selectedBed.ward} · {selectedBed.icu_type}</p>
               </div>
               <button type="button" className="modal-close" style={{ position: "static" }} onClick={() => setSelectedBedId(null)} aria-label="Close">
@@ -302,92 +304,92 @@ export function IcuBedsPage() {
             <div className="drawer-body">
               <div className="form-grid" style={{ marginTop: 16 }}>
                 <label className="form-field">
-                  Status
+                  {t.icuBeds.status}
                   <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value }))}>
-                    {icuBedStatusOptions.map((s) => <option key={s} value={s}>{formatStatus(s)}</option>)}
+                    {icuBedStatusOptions.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
                   </select>
                 </label>
                 <label className="form-field">
-                  Patient no
+                  {t.icuBeds.patientNo}
                   <input value={form.patientNo} onChange={(e) => setForm((f) => ({ ...f, patientNo: e.target.value }))} />
                 </label>
                 <label className="form-field full">
-                  Patient name
+                  {t.icuBeds.patientName}
                   <input value={form.patientName} onChange={(e) => setForm((f) => ({ ...f, patientName: e.target.value }))} />
                 </label>
                 <label className="form-field">
-                  Identifier
+                  {t.icuBeds.identifier}
                   <input value={form.identifier} onChange={(e) => setForm((f) => ({ ...f, identifier: e.target.value }))} />
                 </label>
                 <label className="form-field">
-                  Date of birth
+                  {t.icuBeds.dateOfBirth}
                   <input value={form.dob} onChange={(e) => setForm((f) => ({ ...f, dob: e.target.value }))} placeholder="YYYY-MM-DD" />
                 </label>
                 <label className="form-field">
-                  Age
+                  {t.icuBeds.age}
                   <input value={form.age} onChange={(e) => setForm((f) => ({ ...f, age: e.target.value }))} inputMode="numeric" />
                 </label>
                 <label className="form-field">
-                  Sex
+                  {t.icuBeds.sex}
                   <select value={form.sex} onChange={(e) => setForm((f) => ({ ...f, sex: e.target.value }))}>
-                    <option value="">Unknown</option>
-                    <option value="female">Female</option>
-                    <option value="male">Male</option>
-                    <option value="other">Other</option>
+                    <option value="">{t.icuBeds.unknown}</option>
+                    <option value="female">{t.icuBeds.female}</option>
+                    <option value="male">{t.icuBeds.male}</option>
+                    <option value="other">{t.icuBeds.other}</option>
                   </select>
                 </label>
                 <label className="form-field">
-                  Blood type
+                  {t.icuBeds.bloodType}
                   <input value={form.bloodType} onChange={(e) => setForm((f) => ({ ...f, bloodType: e.target.value }))} />
                 </label>
                 <label className="form-field">
-                  Condition
+                  {t.icuBeds.condition}
                   <input value={form.condition} onChange={(e) => setForm((f) => ({ ...f, condition: e.target.value }))} />
                 </label>
                 <label className="form-field full">
-                  Diagnosis
+                  {t.icuBeds.diagnosis}
                   <input value={form.diagnosis} onChange={(e) => setForm((f) => ({ ...f, diagnosis: e.target.value }))} />
                 </label>
                 <label className="form-field">
-                  Vitals
+                  {t.icuBeds.vitals}
                   <input value={form.vitals} onChange={(e) => setForm((f) => ({ ...f, vitals: e.target.value }))} placeholder="HR: 90, BP: 120/80" />
                 </label>
                 <label className="form-field">
-                  Medications
-                  <input value={form.medications} onChange={(e) => setForm((f) => ({ ...f, medications: e.target.value }))} placeholder="comma separated" />
+                  {t.icuBeds.medications}
+                  <input value={form.medications} onChange={(e) => setForm((f) => ({ ...f, medications: e.target.value }))} placeholder={t.icuBeds.commaSeparated} />
                 </label>
                 <label className="form-field full">
-                  Allergies / alerts
+                  {t.icuBeds.allergiesAlerts}
                   <input value={form.allergies} onChange={(e) => setForm((f) => ({ ...f, allergies: e.target.value }))} />
                 </label>
                 <label className="form-field">
-                  Infection risk
+                  {t.icuBeds.infectionRisk}
                   <input value={form.infectionRisk} onChange={(e) => setForm((f) => ({ ...f, infectionRisk: e.target.value }))} />
                 </label>
                 <label className="form-check" style={{ alignSelf: "end", marginBottom: 13 }}>
                   <input type="checkbox" checked={form.isolation} onChange={(e) => setForm((f) => ({ ...f, isolation: e.target.checked }))} />
-                  Isolation required
+                  {t.icuBeds.isolationRequired}
                 </label>
                 <label className="form-field">
-                  Emergency contact
+                  {t.icuBeds.emergencyContact}
                   <input value={form.contact} onChange={(e) => setForm((f) => ({ ...f, contact: e.target.value }))} />
                 </label>
                 <label className="form-field">
-                  Next of kin
+                  {t.icuBeds.nextOfKin}
                   <input value={form.nextOfKin} onChange={(e) => setForm((f) => ({ ...f, nextOfKin: e.target.value }))} />
                 </label>
                 <label className="form-field full">
-                  Address
+                  {t.icuBeds.address}
                   <input value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
                 </label>
                 <label className="form-field full">
-                  Notes
+                  {t.icuBeds.notes}
                   <input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
                 </label>
               </div>
               <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-                <button type="button" className="btn-primary" onClick={saveBed}>Save bed</button>
-                <button type="button" className="btn-secondary tone-critical" onClick={clearBed}>Remove patient</button>
+                <button type="button" className="btn-primary" onClick={saveBed}>{t.icuBeds.saveBed}</button>
+                <button type="button" className="btn-secondary tone-critical" onClick={clearBed}>{t.icuBeds.removePatient}</button>
               </div>
             </div>
           </aside>

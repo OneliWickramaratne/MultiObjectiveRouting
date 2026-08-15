@@ -13,48 +13,54 @@ import {
   UserCog,
 } from "lucide-react";
 import { useAuth } from "../../state/AuthContext";
+import { useLanguage } from "../../i18n/LanguageContext";
+import { LanguageSwitcher } from "../LanguageSwitcher";
+import type { TranslationKeys } from "../../i18n/translations";
 
-const adminNavGroups: { label: string; items: { to: string; label: string; icon: typeof Activity }[] }[] = [
-  {
-    label: "Console",
-    items: [
-      { to: "/overview", label: "Overview", icon: LayoutDashboard },
-      { to: "/map", label: "Network map", icon: MapIcon },
-      { to: "/transfer", label: "Transfer planner", icon: RouteIcon },
-      { to: "/requests", label: "Requests", icon: ListChecks },
-      { to: "/fleet", label: "Fleet", icon: Ambulance },
-    ],
-  },
-  {
-    label: "Network",
-    items: [
-      { to: "/capacity", label: "Capacity", icon: Activity },
-      { to: "/beds", label: "ICU beds", icon: Bed },
-      { to: "/transfers", label: "Transfers", icon: RouteIcon },
-      { to: "/alerts", label: "Alerts", icon: Bell },
-    ],
-  },
-];
-
-const crewNavItems = [{ to: "/mission", label: "Active mission", icon: Ambulance }];
-
-const pageTitles: Record<string, string> = {
-  "/overview": "Overview",
-  "/map": "Network map",
-  "/transfer": "Transfer planner",
-  "/requests": "Requests",
-  "/fleet": "Fleet",
-  "/capacity": "Capacity",
-  "/beds": "ICU beds",
-  "/transfers": "Transfers",
-  "/alerts": "Alerts",
-  "/mission": "Active mission",
-};
+function buildAdminNavGroups(t: TranslationKeys) {
+  return [
+    {
+      label: "Console",
+      items: [
+        { to: "/overview", label: t.nav.overview, icon: LayoutDashboard },
+        { to: "/map", label: t.nav.networkMap, icon: MapIcon },
+        { to: "/transfer", label: t.nav.transferPlanner, icon: RouteIcon },
+        { to: "/requests", label: t.nav.requests, icon: ListChecks },
+        { to: "/fleet", label: t.nav.fleet, icon: Ambulance },
+      ],
+    },
+    {
+      label: "Network",
+      items: [
+        { to: "/capacity", label: t.nav.capacity, icon: Activity },
+        { to: "/beds", label: t.nav.icuBeds, icon: Bed },
+        { to: "/transfers", label: t.nav.transfers, icon: RouteIcon },
+        { to: "/alerts", label: t.nav.alerts, icon: Bell },
+      ],
+    },
+  ];
+}
 
 export function AppShell() {
   const { user, backendOnline, signOut } = useAuth();
+  const { t } = useLanguage();
   const location = useLocation();
   const isCrew = Boolean(user?.ambulance_id);
+
+  const adminNavGroups = buildAdminNavGroups(t);
+  const crewNavItems = [{ to: "/mission", label: t.nav.activeMission, icon: Ambulance }];
+  const pageTitles: Record<string, string> = {
+    "/overview": t.nav.overview,
+    "/map": t.nav.networkMap,
+    "/transfer": t.nav.transferPlanner,
+    "/requests": t.nav.requests,
+    "/fleet": t.nav.fleet,
+    "/capacity": t.nav.capacity,
+    "/beds": t.nav.icuBeds,
+    "/transfers": t.nav.transfers,
+    "/alerts": t.nav.alerts,
+    "/mission": t.nav.activeMission,
+  };
   const title = pageTitles[location.pathname] ?? "ICU Command";
 
   return (
@@ -72,7 +78,7 @@ export function AppShell() {
 
         <div className={backendOnline ? "rail-status online" : "rail-status"}>
           <span className="dot" />
-          {backendOnline ? "Backend connected" : "Reconnecting…"}
+          {backendOnline ? t.shell.networkConnected : t.shell.networkReconnecting}
         </div>
 
         {isCrew ? (
@@ -116,7 +122,7 @@ export function AppShell() {
             </div>
           </div>
           <button type="button" className="rail-signout" onClick={() => void signOut()}>
-            Sign out
+            {t.common.signOut}
           </button>
         </div>
       </aside>
@@ -124,10 +130,13 @@ export function AppShell() {
       <div className="main">
         <header className="topbar">
           <h2>{title}</h2>
-          <span className="topbar-meta">
-            <AlertCircle size={12} style={{ verticalAlign: "-2px", marginRight: 6, opacity: 0.6 }} />
-            {new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <LanguageSwitcher compact />
+            <span className="topbar-meta">
+              <AlertCircle size={12} style={{ verticalAlign: "-2px", marginRight: 6, opacity: 0.6 }} />
+              {new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}
+            </span>
+          </div>
         </header>
         <Outlet />
       </div>

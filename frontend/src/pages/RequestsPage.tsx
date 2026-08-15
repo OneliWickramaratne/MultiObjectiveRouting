@@ -3,13 +3,10 @@ import { Ambulance, Check, Info, X } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { statusTone } from "../lib/constants";
 import { useAuth } from "../state/AuthContext";
+import { useLanguage } from "../i18n/LanguageContext";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { TransferDetailDrawer } from "../components/TransferDetailDrawer";
 import type { BlockingModal, DashboardSummary, TransferEventSummary, TransferSummary } from "../types";
-
-function formatStatus(status: string) {
-  return status.replace(/_/g, " ");
-}
 
 const STAGES = [
   "pending_destination_acceptance",
@@ -36,6 +33,7 @@ function canAssignAmbulance(transfer: TransferSummary) {
 
 export function RequestsPage() {
   const { user, hospitals } = useAuth();
+  const { t } = useLanguage();
   const isSuperAdmin = user?.role === "super_admin";
   const activeHospitalId = user?.hospital_id ?? null;
 
@@ -97,6 +95,7 @@ export function RequestsPage() {
         // Response wasn't JSON; fall back to the generic message.
       }
       setError(detail);
+      setModal(null);
       return;
     }
     const updated: TransferSummary = await response.json();
@@ -104,57 +103,72 @@ export function RequestsPage() {
     if (response2.ok) setDashboard(await response2.json());
     if (action === "accept") {
       setModal({
-        title: "Request accepted",
+        title: t.requests.acceptedTitle,
         message: updated.ambulance_id
-          ? `Transfer accepted. Bed reserved and ambulance ${updated.ambulance_id} assigned.`
-          : "Transfer accepted. Bed reserved; waiting for an available ambulance.",
+          ? t.requests.acceptedWithAmbulance.replace("{ambulanceId}", updated.ambulance_id)
+          : t.requests.acceptedWaitingAmbulance,
         tone: "success",
-        confirmLabel: "Continue",
+        confirmLabel: t.requests.continueLabel,
       });
+    } else {
+      setModal(null);
     }
   }
 
   function confirmAccept(transfer: TransferSummary) {
     setModal({
-      title: "Accept transfer request?",
-      message: `Accept transfer from ${hospitalName(transfer.origin_hospital_id)} to ${hospitalName(transfer.destination_hospital_id)}? This reserves one ICU bed and auto-assigns an ambulance if one is available.`,
+      title: t.requests.acceptModalTitle,
+      message: t.requests.acceptModalMessage
+        .replace("{origin}", hospitalName(transfer.origin_hospital_id))
+        .replace("{destination}", hospitalName(transfer.destination_hospital_id)),
       tone: "warning",
-      confirmLabel: "Accept request",
-      cancelLabel: "Cancel",
+      confirmLabel: t.requests.acceptConfirmLabel,
+      cancelLabel: t.common.cancel,
       onConfirm: () => executeAction(transfer.id, "accept"),
     });
   }
 
   function confirmReject(transfer: TransferSummary) {
     setModal({
-      title: "Reject transfer request?",
-      message: `Reject the transfer from ${hospitalName(transfer.origin_hospital_id)}? The sending hospital will need to find another destination.`,
+      title: t.requests.rejectModalTitle,
+      message: t.requests.rejectModalMessage.replace("{origin}", hospitalName(transfer.origin_hospital_id)),
       tone: "warning",
-      confirmLabel: "Reject request",
-      cancelLabel: "Cancel",
+      confirmLabel: t.requests.rejectConfirmLabel,
+      cancelLabel: t.common.cancel,
       onConfirm: () => executeAction(transfer.id, "reject"),
     });
   }
 
   const transfers = dashboard?.transfers ?? [];
-  const incoming = transfers.filter((t) => activeHospitalId && t.destination_hospital_id === activeHospitalId);
-  const outgoing = transfers.filter((t) => activeHospitalId && t.origin_hospital_id === activeHospitalId);
+  const incoming = transfers.filter((tr) => activeHospitalId && tr.destination_hospital_id === activeHospitalId);
+  const outgoing = transfers.filter((tr) => activeHospitalId && tr.origin_hospital_id === activeHospitalId);
+
+  function urgencyLabel(level: string) {
+    return (t.enums.urgency as Record<string, string>)[level] ?? level;
+  }
 
   function TransferCard({ transfer }: { transfer: TransferSummary }) {
     const stage = transferStage(transfer);
     const stopped = transfer.status === "rejected" || transfer.status === "cancelled";
+    const timelineLabels = [
+      t.requests.timelineRequest,
+      t.requests.timelineAssigned,
+      t.requests.timelinePickup,
+      t.requests.timelineDestination,
+      t.requests.timelineDone,
+    ];
     return (
       <div className={`transfer-card spine tone-${statusTone(transfer.urgency_class)}`}>
         <div className="transfer-card-head">
           <div>
             <strong>{hospitalName(transfer.origin_hospital_id)} → {hospitalName(transfer.destination_hospital_id)}</strong>
-            <span className="row-sub">{transfer.required_icu_type} · {transfer.patient_name ?? "Unnamed"} · {transfer.patient_condition}</span>
+            <span className="row-sub">{transfer.required_icu_type} · {transfer.patient_name ?? t.requests.unnamed} · {transfer.patient_condition}</span>
           </div>
-          <span className={`pill tone-${statusTone(transfer.urgency_class)}`}>{transfer.urgency_class}</span>
+          <span className={`pill tone-${statusTone(transfer.urgency_class)}`}>{urgencyLabel(transfer.urgency_class)}</span>
         </div>
 
         <div className="transfer-timeline">
-          {["Request", "Assigned", "Pickup", "Destination", "Done"].map((label, index) => (
+          {timelineLabels.map((label, index) => (
             <span
               key={label}
               className={
@@ -172,21 +186,21 @@ export function RequestsPage() {
 
         <div className="transfer-card-actions">
           <button type="button" className="btn-secondary" onClick={() => void openDetail(transfer)}>
-            <Info size={13} /> Details
+            <Info size={13} /> {t.requests.details}
           </button>
           {canAcceptTransfer(transfer) && (
             <>
               <button type="button" className="btn-secondary tone-moderate" onClick={() => confirmAccept(transfer)}>
-                <Check size={13} /> Accept
+                <Check size={13} /> {t.requests.accept}
               </button>
               <button type="button" className="btn-secondary tone-critical" onClick={() => confirmReject(transfer)}>
-                <X size={13} /> Reject
+                <X size={13} /> {t.requests.reject}
               </button>
             </>
           )}
           {isSuperAdmin && canAssignAmbulance(transfer) && (
             <button type="button" className="btn-secondary" onClick={() => executeAction(transfer.id, "assign-ambulance")}>
-              <Ambulance size={13} /> Assign ambulance
+              <Ambulance size={13} /> {t.requests.assignAmbulance}
             </button>
           )}
         </div>
@@ -201,34 +215,34 @@ export function RequestsPage() {
       {isSuperAdmin ? (
         <>
           <div className="section-head" style={{ marginTop: 0 }}>
-            <h3>Transfer command queue</h3>
-            <span className="hint">{transfers.length} total</span>
+            <h3>{t.requests.transferQueueHeading}</h3>
+            <span className="hint">{transfers.length} {t.requests.totalSuffix}</span>
           </div>
           <div className="row-list">
-            {transfers.length ? transfers.map((t) => <TransferCard key={t.id} transfer={t} />) : (
-              <div className="card empty-state">No transfer requests in the network.</div>
+            {transfers.length ? transfers.map((tr) => <TransferCard key={tr.id} transfer={tr} />) : (
+              <div className="card empty-state">{t.requests.noNetworkRequests}</div>
             )}
           </div>
         </>
       ) : (
         <>
           <div className="section-head" style={{ marginTop: 0 }}>
-            <h3>Incoming requests</h3>
-            <span className="hint">awaiting your decision</span>
+            <h3>{t.requests.incomingHeading}</h3>
+            <span className="hint">{t.requests.awaitingDecision}</span>
           </div>
           <div className="row-list">
-            {incoming.length ? incoming.map((t) => <TransferCard key={t.id} transfer={t} />) : (
-              <div className="card empty-state">No incoming transfer requests.</div>
+            {incoming.length ? incoming.map((tr) => <TransferCard key={tr.id} transfer={tr} />) : (
+              <div className="card empty-state">{t.requests.noIncoming}</div>
             )}
           </div>
 
           <div className="section-head">
-            <h3>Outgoing transfers</h3>
-            <span className="hint">sent from your hospital</span>
+            <h3>{t.requests.outgoingHeading}</h3>
+            <span className="hint">{t.requests.sentFromHospital}</span>
           </div>
           <div className="row-list">
-            {outgoing.length ? outgoing.map((t) => <TransferCard key={t.id} transfer={t} />) : (
-              <div className="card empty-state">No outgoing transfer requests.</div>
+            {outgoing.length ? outgoing.map((tr) => <TransferCard key={tr.id} transfer={tr} />) : (
+              <div className="card empty-state">{t.requests.noOutgoing}</div>
             )}
           </div>
         </>

@@ -10,6 +10,7 @@ import {
   statusTone,
 } from "../lib/constants";
 import { useAuth } from "../state/AuthContext";
+import { useLanguage } from "../i18n/LanguageContext";
 import { ConfirmModal } from "../components/ConfirmModal";
 import type { BlockingModal, Recommendation, RouteOption, TransferResponse } from "../types";
 
@@ -34,6 +35,7 @@ function parseMedicationText(value: string) {
 
 export function TransferPlannerPage() {
   const { user, hospitals } = useAuth();
+  const { t } = useLanguage();
   const isHospitalAdmin = Boolean(user?.hospital_id);
 
   // Step 1 — clinical picture, used to find and rank destination hospitals.
@@ -82,23 +84,23 @@ export function TransferPlannerPage() {
   );
 
   function showNotice(title: string, message: string, tone: BlockingModal["tone"] = "info") {
-    setModal({ title, message, tone, confirmLabel: "Acknowledge" });
+    setModal({ title, message, tone, confirmLabel: t.planner.acknowledge });
   }
 
   function validatePatientPacket() {
     const missing: string[] = [];
-    if (!patientName.trim()) missing.push("patient name");
-    if (!patientAge.trim()) missing.push("age");
+    if (!patientName.trim()) missing.push(t.planner.patientName.toLowerCase());
+    if (!patientAge.trim()) missing.push(t.planner.age.toLowerCase());
     const numericAge = Number(patientAge);
     if (patientAge.trim() && (!Number.isFinite(numericAge) || numericAge < 0 || numericAge > 130)) {
-      missing.push("valid age");
+      missing.push(t.planner.age.toLowerCase());
     }
-    if (!patientBloodType.trim()) missing.push("blood type");
-    if (!patientContact.trim()) missing.push("emergency contact");
+    if (!patientBloodType.trim()) missing.push(t.planner.bloodType.toLowerCase());
+    if (!patientContact.trim()) missing.push(t.planner.emergencyContact.toLowerCase());
     if (missing.length) {
       showNotice(
-        "Patient details required",
-        `Add ${missing.join(", ")} before sending this transfer request. The receiving hospital needs this packet to reserve the correct ICU bed.`,
+        t.planner.patientDetailsRequiredTitle,
+        t.planner.addBeforeSending.replace("{fields}", missing.join(", ")),
         "warning",
       );
       return false;
@@ -209,13 +211,16 @@ export function TransferPlannerPage() {
         // Response wasn't JSON; fall back to the generic message.
       }
       setError(detail);
+      setModal(null);
       return;
     }
     const transfer = await response.json();
     setPendingRecommendation(null);
     showNotice(
-      "Request sent",
-      `Transfer request sent to ${recommendation.destination_name}. Request ID: ${transfer.id.slice(0, 8)}.`,
+      t.planner.requestSentTitle,
+      t.planner.requestSentMessage
+        .replace("{destination}", recommendation.destination_name)
+        .replace("{id}", transfer.id.slice(0, 8)),
       "success",
     );
   }
@@ -229,11 +234,16 @@ export function TransferPlannerPage() {
     if (!validatePatientPacket()) return;
     const recommendation = pendingRecommendation;
     setModal({
-      title: "Send transfer request?",
-      message: `Send ${patientName.trim()} (${patientAge.trim()}, ${patientBloodType.trim()}) from ${originHospital?.name ?? "origin"} to ${recommendation.destination_name}? The receiving hospital must accept before ambulance dispatch.`,
+      title: t.planner.sendTransferRequestTitle,
+      message: t.planner.sendConfirmMessage
+        .replace("{name}", patientName.trim())
+        .replace("{age}", patientAge.trim())
+        .replace("{bloodType}", patientBloodType.trim())
+        .replace("{origin}", originHospital?.name ?? "origin")
+        .replace("{destination}", recommendation.destination_name),
       tone: "warning",
-      confirmLabel: "Send request",
-      cancelLabel: "Cancel",
+      confirmLabel: t.planner.sendRequestLabel,
+      cancelLabel: t.common.cancel,
       onConfirm: () => sendTransferRequest(recommendation),
     });
   }
@@ -241,84 +251,88 @@ export function TransferPlannerPage() {
   const hasRun = Boolean(recommendationData);
   const noMatches = hasRun && recommendationData!.recommendations.length === 0;
 
+  function urgencyLabel(level: string) {
+    return (t.enums.urgency as Record<string, string>)[level] ?? level;
+  }
+
   return (
     <div className="page planner-page">
       {error && <div className="page-error">{error}</div>}
 
       <div className="card card-pad planner-form-card">
-        <h3 className="form-title"><span className="icon-chip"><Building2 size={15} /></span> Clinical picture</h3>
+        <h3 className="form-title"><span className="icon-chip"><Building2 size={15} /></span> {t.planner.clinicalPicture}</h3>
 
         <div className="form-grid">
           <label className="form-field">
-            Origin hospital
+            {t.planner.originHospital}
             <select
               value={originId}
               disabled={isHospitalAdmin}
               onChange={(e) => { setOriginId(e.target.value); setRecommendationData(null); setRoutes([]); }}
             >
               {hospitals.map((h) => (
-                <option key={h.id} value={h.id}>{h.name} — {h.icu_types.join("/")} · {h.available_beds} open</option>
+                <option key={h.id} value={h.id}>{h.name} — {h.icu_types.join("/")} · {h.available_beds} {t.planner.open}</option>
               ))}
             </select>
           </label>
           <label className="form-field">
-            Required ICU
+            {t.planner.requiredIcu}
             <select value={requiredIcu} onChange={(e) => setRequiredIcu(e.target.value)}>
               {icuOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
           <label className="form-field">
-            Condition
+            {t.planner.condition}
             <select value={conditionType} onChange={(e) => setConditionType(e.target.value)}>
               {conditionOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
 
           <div className="form-field full" style={{ marginBottom: 6 }}>
-            <span>{requiredIcu} availability across the network</span>
+            <span>{requiredIcu} {t.planner.availabilityAcrossNetwork}</span>
             <div className="icu-support-strip">
               {icuSupportingHospitals.length === 0 ? (
-                <span className="pill tone-critical">No hospital currently supports {requiredIcu}</span>
+                <span className="pill tone-critical">{t.planner.noHospitalSupports} {requiredIcu}</span>
               ) : (
                 icuSupportingHospitals.map((h) => (
                   <span key={h.id} className={`pill tone-${h.available_beds > 0 ? "stable" : "offline"}`}>
-                    {h.name}: {h.available_beds} open
+                    {h.name}: {h.available_beds} {t.planner.open}
                   </span>
                 ))
               )}
             </div>
           </div>
 
-          <div className="form-divider full">Condition detail</div>
+          <div className="form-divider full">{t.planner.conditionDetail}</div>
 
           <label className="form-field">
-            Oxygen
+            {t.planner.oxygen}
             <select value={oxygen} onChange={(e) => setOxygen(e.target.value)}>
               {oxygenOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
           <label className="form-field">
-            Blood pressure
+            {t.planner.bloodPressure}
             <select value={bloodPressure} onChange={(e) => setBloodPressure(e.target.value)}>
               {bloodPressureOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
           <label className="form-field">
-            Consciousness
+            {t.planner.consciousness}
             <select value={consciousness} onChange={(e) => setConsciousness(e.target.value)}>
               {consciousnessOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>
           <label className="form-check" style={{ alignSelf: "end", marginBottom: 13 }}>
             <input type="checkbox" checked={ventilatorRequired} onChange={(e) => setVentilatorRequired(e.target.checked)} />
-            Ventilator required
+            {t.planner.ventilatorRequired}
           </label>
         </div>
 
         <div className="planner-submit-row">
           <button type="button" className="btn-primary" onClick={recommendTransfer} disabled={loading || !originId}>
             {loading ? <Loader2 size={16} className="spin" /> : <RouteIcon size={16} />}
-            Find matching hospitals
+            {t.planner.findMatchingHospitals}
           </button>
         </div>
       </div>
@@ -326,20 +340,21 @@ export function TransferPlannerPage() {
       {hasRun && (
         <div className="card card-pad" style={{ marginTop: 20 }}>
           <div className="section-head" style={{ marginTop: 0 }}>
-            <h3>Recommendations</h3>
+            <h3>{t.planner.recommendationsHeading}</h3>
             <span className={`pill tone-${statusTone(recommendationData!.urgency_class)}`}>
-              {recommendationData!.urgency_class} · {recommendationData!.urgency_score.toFixed(2)}
+              {urgencyLabel(recommendationData!.urgency_class)} · {recommendationData!.urgency_score.toFixed(2)}
             </span>
           </div>
 
           {noMatches ? (
             <div className="empty-state" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "40px 20px" }}>
               <SearchX size={22} style={{ color: "var(--text-faint)" }} />
-              <div>No hospitals match this request.</div>
+              <div>{t.planner.noHospitalsMatch}</div>
               <div style={{ fontSize: 12, maxWidth: 380 }}>
-                No other hospital currently has an available <strong>{requiredIcu}</strong> bed that supports
-                a <strong>{conditionType}</strong> case{ventilatorRequired ? " with ventilator support" : ""}.
-                Try a different ICU type or check bed status on the Capacity page.
+                {t.planner.noHospitalsMatchDetail
+                  .replace("{icu}", requiredIcu)
+                  .replace("{condition}", conditionType)
+                  .replace("{ventilator}", ventilatorRequired ? t.planner.withVentilatorSupport : "")}
               </div>
             </div>
           ) : (
@@ -355,10 +370,10 @@ export function TransferPlannerPage() {
                       <span className="rec-score">{rec.score.toFixed(3)}</span>
                     </div>
                     <div className="rec-tile-name">{rec.destination_name}</div>
-                    <div className="rec-tile-meta">{rec.estimated_minutes.toFixed(1)} min ETA · {rec.available_beds} beds open</div>
+                    <div className="rec-tile-meta">{rec.estimated_minutes.toFixed(1)} {t.planner.minEta} · {rec.available_beds} {t.planner.bedsOpen}</div>
                   </button>
                   <button type="button" className="btn-secondary btn-block-tile" onClick={() => beginPatientDetails(rec)}>
-                    <Send size={13} /> Request transfer
+                    <Send size={13} /> {t.planner.requestTransfer}
                   </button>
                 </div>
               ))}
@@ -369,24 +384,24 @@ export function TransferPlannerPage() {
 
       {selectedDestinationId && !noMatches && (
         <div className="card card-pad" style={{ marginTop: 20 }}>
-          <h3 style={{ marginBottom: 14 }}>Selected route — {selectedDestination?.name}</h3>
-          {routeLoading && <div className="empty-state">Loading route…</div>}
+          <h3 style={{ marginBottom: 14 }}>{t.planner.selectedRoutePrefix} {selectedDestination?.name}</h3>
+          {routeLoading && <div className="empty-state">{t.planner.loadingRoute}</div>}
           {activeRoute && !routeLoading && (
             <div className="metric-grid" style={{ marginBottom: 0 }}>
               <div className="metric-card">
-                <div className="label"><span className="icon-chip"><Bed size={15} /></span> Available beds</div>
+                <div className="label"><span className="icon-chip"><Bed size={15} /></span> {t.planner.availableBeds}</div>
                 <div className="value">{selectedDestination?.available_beds ?? "—"}</div>
               </div>
               <div className="metric-card">
-                <div className="label"><span className="icon-chip"><RouteIcon size={15} /></span> ETA</div>
+                <div className="label"><span className="icon-chip"><RouteIcon size={15} /></span> {t.planner.eta}</div>
                 <div className="value">{activeRoute.estimated_minutes.toFixed(1)}<span style={{ fontSize: 13 }}> min</span></div>
               </div>
               <div className="metric-card">
-                <div className="label"><span className="icon-chip tone-high"><AlertCircle size={15} /></span> Risk score</div>
+                <div className="label"><span className="icon-chip tone-high"><AlertCircle size={15} /></span> {t.planner.riskScore}</div>
                 <div className="value">{activeRoute.risk_score.toFixed(2)}</div>
               </div>
               <div className="metric-card">
-                <div className="label">Distance</div>
+                <div className="label">{t.planner.distance}</div>
                 <div className="value">{activeRoute.distance_km.toFixed(1)}<span style={{ fontSize: 13 }}> km</span></div>
               </div>
             </div>
@@ -396,7 +411,7 @@ export function TransferPlannerPage() {
 
       {!hasRun && !loading && (
         <div className="card empty-state" style={{ padding: "50px 20px", marginTop: 20 }}>
-          Fill in the clinical picture above and find matching hospitals to see ranked destinations.
+          {t.planner.fillClinicalPicture}
         </div>
       )}
 
@@ -405,8 +420,8 @@ export function TransferPlannerPage() {
           <aside className="drawer-panel" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <div>
-                <h2>Patient details</h2>
-                <p>Sending to {pendingRecommendation.destination_name}</p>
+                <h2>{t.planner.patientDetails}</h2>
+                <p>{t.planner.sendingTo} {pendingRecommendation.destination_name}</p>
               </div>
               <button type="button" className="modal-close" style={{ position: "static" }} onClick={() => setPendingRecommendation(null)} aria-label="Close">
                 <X size={18} />
@@ -414,64 +429,64 @@ export function TransferPlannerPage() {
             </div>
             <div className="drawer-body">
               <p style={{ fontSize: 12.5, color: "var(--text-faint)", margin: "16px 0" }}>
-                The receiving hospital needs this packet to reserve the correct ICU bed and prepare handover.
+                {t.planner.receivingHospitalNeeds}
               </p>
               <div className="form-grid">
                 <label className="form-field full">
-                  Patient name
-                  <input value={patientName} onChange={(e) => setPatientName(e.target.value)} placeholder="Full name" />
+                  {t.planner.patientName}
+                  <input value={patientName} onChange={(e) => setPatientName(e.target.value)} placeholder={t.planner.fullName} />
                 </label>
                 <label className="form-field">
-                  Identifier
+                  {t.planner.identifier}
                   <input value={patientIdentifier} onChange={(e) => setPatientIdentifier(e.target.value)} placeholder="NIC / MRN" />
                 </label>
                 <label className="form-field">
-                  Age
-                  <input value={patientAge} onChange={(e) => setPatientAge(e.target.value)} inputMode="numeric" placeholder="Age" />
+                  {t.planner.age}
+                  <input value={patientAge} onChange={(e) => setPatientAge(e.target.value)} inputMode="numeric" placeholder={t.planner.age} />
                 </label>
                 <label className="form-field">
-                  Sex
+                  {t.planner.sex}
                   <select value={patientSex} onChange={(e) => setPatientSex(e.target.value)}>
-                    <option value="unknown">Unknown</option>
-                    <option value="female">Female</option>
-                    <option value="male">Male</option>
-                    <option value="other">Other</option>
+                    <option value="unknown">{t.planner.unknown}</option>
+                    <option value="female">{t.planner.female}</option>
+                    <option value="male">{t.planner.male}</option>
+                    <option value="other">{t.planner.other}</option>
                   </select>
                 </label>
                 <label className="form-field">
-                  Blood type
+                  {t.planner.bloodType}
                   <input value={patientBloodType} onChange={(e) => setPatientBloodType(e.target.value)} placeholder="O+, A-" />
                 </label>
                 <label className="form-field full">
-                  Emergency contact
-                  <input value={patientContact} onChange={(e) => setPatientContact(e.target.value)} placeholder="Name / phone" />
+                  {t.planner.emergencyContact}
+                  <input value={patientContact} onChange={(e) => setPatientContact(e.target.value)} placeholder={t.planner.namePhone} />
                 </label>
                 <label className="form-field full">
-                  Working diagnosis
+                  {t.planner.workingDiagnosis}
                   <input value={patientDiagnosis} onChange={(e) => setPatientDiagnosis(e.target.value)} placeholder="Sepsis, polytrauma, STEMI..." />
                 </label>
                 <label className="form-field full">
-                  Allergies / alerts
+                  {t.planner.allergiesAlerts}
                   <input value={patientAllergies} onChange={(e) => setPatientAllergies(e.target.value)} placeholder="Known allergies, infection risks" />
                 </label>
                 <label className="form-field">
-                  Vitals
+                  {t.planner.vitals}
                   <input value={patientVitals} onChange={(e) => setPatientVitals(e.target.value)} placeholder="HR: 120, BP: 90/60, SpO2: 88" />
                 </label>
                 <label className="form-field">
-                  Medications
+                  {t.planner.medications}
                   <input value={patientMedications} onChange={(e) => setPatientMedications(e.target.value)} placeholder="Noradrenaline, ceftriaxone" />
                 </label>
                 <label className="form-check" style={{ alignSelf: "end", marginBottom: 13 }}>
                   <input type="checkbox" checked={patientIsolation} onChange={(e) => setPatientIsolation(e.target.checked)} />
-                  Isolation required
+                  {t.planner.isolationRequired}
                 </label>
               </div>
               <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
                 <button type="button" className="btn-primary" onClick={confirmSendRequest}>
-                  <UserRound size={15} /> Send transfer request
+                  <UserRound size={15} /> {t.planner.sendTransferRequest}
                 </button>
-                <button type="button" className="btn-ghost" onClick={() => setPendingRecommendation(null)}>Cancel</button>
+                <button type="button" className="btn-ghost" onClick={() => setPendingRecommendation(null)}>{t.common.cancel}</button>
               </div>
             </div>
           </aside>

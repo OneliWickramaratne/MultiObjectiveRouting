@@ -260,6 +260,7 @@ def reserve_transfer_bed(db: Session, transfer: TransferRequestModel) -> ICUBedM
             transfer_id=transfer.id,
         )
         db.add(patient)
+        db.flush()
     patient.patient_no = patient.patient_no or f"TR-{transfer.id[:8]}"
     patient.patient_name = transfer.patient_name or patient.patient_name
     patient.identifier_system = patient.identifier_system or "urn:ietf:rfc:3986"
@@ -745,8 +746,10 @@ def update_icu_bed(
     changes = request.model_dump(exclude_unset=True)
     previous_status = bed.status
     previous_patient_id = bed.patient.id if bed.patient else None
+    patient_removed_this_request = False
     if request.clear_patient and bed.patient:
         db.delete(bed.patient)
+        patient_removed_this_request = True
         bed.status = "available"
         bed.status_reason = request.status_reason or "Patient removed from bed."
     elif request.patient_name or request.patient_no or request.patient_condition:
@@ -776,6 +779,7 @@ def update_icu_bed(
                 address=request.address,
             )
             db.add(patient)
+            db.flush()
         patient.patient_no = request.patient_no or patient.patient_no
         patient.patient_name = request.patient_name or patient.patient_name
         patient.identifier_system = patient.identifier_system or "urn:ietf:rfc:3986"
@@ -803,6 +807,7 @@ def update_icu_bed(
         bed.status_reason = request.status_reason
         if bed.status != "occupied" and bed.patient:
             db.delete(bed.patient)
+            patient_removed_this_request = True
 
     bed.updated_at = datetime.utcnow()
     record_bed_lifecycle_event(
@@ -812,7 +817,7 @@ def update_icu_bed(
         bed.status,
         user,
         request.status_reason,
-        bed.patient.id if bed.patient else previous_patient_id,
+        None if patient_removed_this_request else (bed.patient.id if bed.patient else previous_patient_id),
         bed.patient.transfer_id if bed.patient else None,
     )
     sync_hospital_bed_counts(db, bed.hospital_id)
@@ -929,6 +934,7 @@ def create_transfer_request(
         notes=request.notes,
     )
     db.add(transfer)
+    db.flush()
     audit(db, user, "transfer_created", "transfer", transfer.id, request.model_dump())
     add_transfer_event(
         db,

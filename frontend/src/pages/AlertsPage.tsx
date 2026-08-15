@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Activity, Ambulance, CheckCircle2, Siren, UserCheck } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { useAuth } from "../state/AuthContext";
+import { useLanguage } from "../i18n/LanguageContext";
 import { TransferDetailDrawer } from "../components/TransferDetailDrawer";
 import type { CapacityForecastSummary, DashboardSummary, TransferEventSummary, TransferSummary } from "../types";
 
@@ -25,11 +26,16 @@ function destinationEtaMinutes(transfer: TransferSummary): number | null {
 
 export function AlertsPage() {
   const { hospitals, backendOnline, user } = useAuth();
+  const { t } = useLanguage();
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [forecast, setForecast] = useState<CapacityForecastSummary | null>(null);
   const [selectedTransfer, setSelectedTransfer] = useState<TransferSummary | null>(null);
   const [transferEvents, setTransferEvents] = useState<TransferEventSummary[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
+
+  function pressureLabel(level: string) {
+    return (t.enums.pressure as Record<string, string>)[level] ?? level;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -63,11 +69,11 @@ export function AlertsPage() {
   }
 
   const criticalTransfers = (dashboard?.transfers ?? []).filter(
-    (t) => t.urgency_class === "critical" && !["completed", "rejected"].includes(t.status),
+    (tr) => tr.urgency_class === "critical" && !["completed", "rejected"].includes(tr.status),
   );
-  const incomingPatients = (dashboard?.transfers ?? []).filter((t) => {
-    if (t.status !== "en_route_to_destination") return false;
-    if (user?.role === "hospital_admin" && t.destination_hospital_id !== user.hospital_id) return false;
+  const incomingPatients = (dashboard?.transfers ?? []).filter((tr) => {
+    if (tr.status !== "en_route_to_destination") return false;
+    if (user?.role === "hospital_admin" && tr.destination_hospital_id !== user.hospital_id) return false;
     return true;
   });
   const offlineAmbulances = (dashboard?.ambulances ?? []).filter((a) => a.status === "offline");
@@ -82,30 +88,34 @@ export function AlertsPage() {
       <div className={`alert-row ${backendOnline ? "tone-stable" : "tone-critical"}`}>
         {backendOnline ? <CheckCircle2 size={18} /> : <Activity size={18} />}
         <div>
-          <strong>{backendOnline ? "Hospital network connected" : "Hospital network reconnecting"}</strong>
-          <span>{backendOnline ? "Live updates are operational." : "Actions are temporarily unavailable."}</span>
+          <strong>{backendOnline ? t.shell.networkConnected : t.shell.networkReconnecting}</strong>
+          <span>{backendOnline ? t.shell.liveUpdatesOk : t.shell.actionsUnavailable}</span>
         </div>
       </div>
 
-      {incomingPatients.map((t) => {
-        const eta = destinationEtaMinutes(t);
+      {incomingPatients.map((tr) => {
+        const eta = destinationEtaMinutes(tr);
         return (
-          <button key={`incoming-${t.id}`} type="button" className="alert-row tone-high alert-row-clickable" onClick={() => void openDetail(t)}>
+          <button key={`incoming-${tr.id}`} type="button" className="alert-row tone-high alert-row-clickable" onClick={() => void openDetail(tr)}>
             <UserCheck size={18} />
             <div>
-              <strong>Patient arriving{eta != null ? ` in ~${Math.round(eta)} min` : " soon"} — prepare reception</strong>
-              <span>{t.patient_name ?? "Unnamed patient"} from {hospitalName(t.origin_hospital_id)} → {hospitalName(t.destination_hospital_id)}</span>
+              <strong>
+                {eta != null
+                  ? t.alerts.patientArrivingIn.replace("{minutes}", String(Math.round(eta)))
+                  : t.alerts.patientArrivingSoon}
+              </strong>
+              <span>{tr.patient_name ?? t.alerts.unnamedPatient} from {hospitalName(tr.origin_hospital_id)} → {hospitalName(tr.destination_hospital_id)}</span>
             </div>
           </button>
         );
       })}
 
-      {criticalTransfers.map((t) => (
-        <button key={t.id} type="button" className="alert-row tone-critical alert-row-clickable" onClick={() => void openDetail(t)}>
+      {criticalTransfers.map((tr) => (
+        <button key={tr.id} type="button" className="alert-row tone-critical alert-row-clickable" onClick={() => void openDetail(tr)}>
           <Siren size={18} />
           <div>
-            <strong>Critical transfer in progress</strong>
-            <span>{hospitalName(t.origin_hospital_id)} → {hospitalName(t.destination_hospital_id)}</span>
+            <strong>{t.alerts.criticalTransferInProgress}</strong>
+            <span>{hospitalName(tr.origin_hospital_id)} → {hospitalName(tr.destination_hospital_id)}</span>
           </div>
         </button>
       ))}
@@ -114,7 +124,7 @@ export function AlertsPage() {
         <div key={h.hospital_id} className={`alert-row tone-${h.points[0].pressure_level === "critical" ? "critical" : "high"}`}>
           <Activity size={18} />
           <div>
-            <strong>{h.hospital_name} under {h.points[0].pressure_level} pressure</strong>
+            <strong>{h.hospital_name} {t.alerts.underPressure.replace("{level}", pressureLabel(h.points[0].pressure_level))}</strong>
             <span>{h.recommended_action}</span>
           </div>
         </div>
@@ -124,7 +134,7 @@ export function AlertsPage() {
         <div className="alert-row tone-high">
           <Ambulance size={18} />
           <div>
-            <strong>{offlineAmbulances.length} ambulance{offlineAmbulances.length > 1 ? "s" : ""} offline</strong>
+            <strong>{offlineAmbulances.length} {offlineAmbulances.length > 1 ? t.alerts.ambulanceOfflinePlural : t.alerts.ambulanceOfflineSingular}</strong>
             <span>{offlineAmbulances.map((a) => a.call_sign).join(", ")}</span>
           </div>
         </div>
@@ -132,7 +142,7 @@ export function AlertsPage() {
 
       {!hasAnyAlert && (
         <div className="card empty-state" style={{ padding: "50px 20px" }}>
-          No active alerts. The network is operating normally.
+          {t.alerts.noActiveAlerts}
         </div>
       )}
 

@@ -3,12 +3,9 @@ import { Search } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { statusTone } from "../lib/constants";
 import { useAuth } from "../state/AuthContext";
+import { useLanguage } from "../i18n/LanguageContext";
 import { TransferDetailDrawer } from "../components/TransferDetailDrawer";
 import type { DashboardSummary, TransferEventSummary, TransferSummary } from "../types";
-
-function formatStatus(status: string) {
-  return status.replace(/_/g, " ");
-}
 
 const STATUS_FILTERS = [
   "all",
@@ -23,6 +20,7 @@ const STATUS_FILTERS = [
 
 export function TransfersPage() {
   const { hospitals } = useAuth();
+  const { t } = useLanguage();
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -30,6 +28,13 @@ export function TransfersPage() {
   const [selectedTransfer, setSelectedTransfer] = useState<TransferSummary | null>(null);
   const [transferEvents, setTransferEvents] = useState<TransferEventSummary[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
+
+  function statusLabel(status: string) {
+    return (t.enums.transferStatus as Record<string, string>)[status] ?? status.split("_").join(" ");
+  }
+  function urgencyLabel(level: string) {
+    return (t.enums.urgency as Record<string, string>)[level] ?? level;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -68,15 +73,15 @@ export function TransfersPage() {
     const all = dashboard?.transfers ?? [];
     const query = search.trim().toLowerCase();
     return all
-      .filter((t) => statusFilter === "all" || t.status === statusFilter)
-      .filter((t) => {
+      .filter((tr) => statusFilter === "all" || tr.status === statusFilter)
+      .filter((tr) => {
         if (!query) return true;
         const haystack = [
-          t.patient_name ?? "",
-          hospitalName(t.origin_hospital_id),
-          hospitalName(t.destination_hospital_id),
-          t.patient_condition,
-          t.required_icu_type,
+          tr.patient_name ?? "",
+          hospitalName(tr.origin_hospital_id),
+          hospitalName(tr.destination_hospital_id),
+          tr.patient_condition,
+          tr.required_icu_type,
         ].join(" ").toLowerCase();
         return haystack.includes(query);
       })
@@ -94,40 +99,40 @@ export function TransfersPage() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by patient, hospital, or condition…"
+            placeholder={t.transfersPage.searchPlaceholder}
           />
         </div>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           {STATUS_FILTERS.map((s) => (
-            <option key={s} value={s}>{s === "all" ? "All statuses" : formatStatus(s)}</option>
+            <option key={s} value={s}>{s === "all" ? t.transfersPage.allStatuses : statusLabel(s)}</option>
           ))}
         </select>
       </div>
 
       <div className="section-head" style={{ marginTop: 0 }}>
-        <h3>Transfer history</h3>
-        <span className="hint">{transfers.length} shown</span>
+        <h3>{t.transfersPage.transferHistoryHeading}</h3>
+        <span className="hint">{transfers.length} {t.transfersPage.shownSuffix}</span>
       </div>
 
       <div className="row-list">
-        {transfers.length ? transfers.map((t) => (
+        {transfers.length ? transfers.map((tr) => (
           <button
-            key={t.id}
+            key={tr.id}
             type="button"
-            className={`row-card spine tone-${statusTone(t.urgency_class)} row-card-clickable`}
-            onClick={() => void openDetail(t)}
+            className={`row-card spine tone-${statusTone(tr.urgency_class)} row-card-clickable`}
+            onClick={() => void openDetail(tr)}
           >
             <div className="row-main">
-              <span className="row-title">{hospitalName(t.origin_hospital_id)} → {hospitalName(t.destination_hospital_id)}</span>
-              <span className="row-sub">{t.patient_name ?? "Unnamed"} · {t.patient_condition} · {t.required_icu_type}</span>
+              <span className="row-title">{hospitalName(tr.origin_hospital_id)} → {hospitalName(tr.destination_hospital_id)}</span>
+              <span className="row-sub">{tr.patient_name ?? t.transfersPage.unnamed} · {tr.patient_condition} · {tr.required_icu_type}</span>
             </div>
             <div className="row-figures">
-              <span className={`pill tone-${statusTone(t.urgency_class)}`}>{t.urgency_class}</span>
-              <span className="pill tone-offline">{formatStatus(t.status)}</span>
+              <span className={`pill tone-${statusTone(tr.urgency_class)}`}>{urgencyLabel(tr.urgency_class)}</span>
+              <span className="pill tone-offline">{statusLabel(tr.status)}</span>
             </div>
           </button>
         )) : (
-          <div className="card empty-state">No transfers match this filter.</div>
+          <div className="card empty-state">{t.transfersPage.noTransfersMatch}</div>
         )}
       </div>
 

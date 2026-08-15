@@ -32,8 +32,17 @@ export function ConfirmModal({ modal, onClose }: { modal: BlockingModal | null; 
             type="button"
             className="btn-primary"
             onClick={async () => {
-              await modal.onConfirm?.();
-              onClose();
+              if (!modal.onConfirm) {
+                onClose();
+                return;
+              }
+              try {
+                await modal.onConfirm();
+              } catch (err) {
+                // eslint-disable-next-line no-console
+                console.error("ConfirmModal onConfirm failed:", err);
+                onClose();
+              }
             }}
           >
             {modal.confirmLabel}

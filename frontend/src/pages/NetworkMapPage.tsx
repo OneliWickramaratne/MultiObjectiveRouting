@@ -4,11 +4,8 @@ import { divIcon } from "leaflet";
 import { Ambulance, Building2 } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { statusTone } from "../lib/constants";
+import { useLanguage } from "../i18n/LanguageContext";
 import type { AmbulanceSummary, CapacityForecastSummary, DashboardSummary, Hospital, TransferSummary } from "../types";
-
-function formatStatus(status: string) {
-  return status.replace(/_/g, " ");
-}
 
 const TONE_HEX: Record<string, string> = {
   critical: "#d6453d",
@@ -70,9 +67,17 @@ function ambulanceMarkerHtml(color: string, transporting: boolean) {
 }
 
 export function NetworkMapPage() {
+  const { t } = useLanguage();
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [forecast, setForecast] = useState<CapacityForecastSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  function pressureLabel(level: string) {
+    return (t.enums.pressure as Record<string, string>)[level] ?? level;
+  }
+  function ambulanceStatusLabel(status: string) {
+    return (t.enums.ambulanceStatus as Record<string, string>)[status] ?? status.split("_").join(" ");
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -156,12 +161,12 @@ export function NetworkMapPage() {
       {error && <div className="page-error">{error}</div>}
 
       <div className="map-legend-bar">
-        <span className="legend-item"><span className="icon-chip"><Building2 size={13} /></span> Hospitals colored by capacity pressure</span>
-        <span className="legend-item"><span className="icon-chip"><Ambulance size={13} /></span> Ambulances colored by status</span>
-        <span className="legend-dot" style={{ background: TONE_HEX.stable }} /> Stable
-        <span className="legend-dot" style={{ background: TONE_HEX.high }} /> High
-        <span className="legend-dot" style={{ background: TONE_HEX.critical }} /> Critical
-        <span className="legend-item">— active mission route · ····· returning to base · white ring = patient onboard</span>
+        <span className="legend-item"><span className="icon-chip"><Building2 size={13} /></span> {t.networkMap.hospitalsColoredByPressure}</span>
+        <span className="legend-item"><span className="icon-chip"><Ambulance size={13} /></span> {t.networkMap.ambulancesColoredByStatus}</span>
+        <span className="legend-dot" style={{ background: TONE_HEX.stable }} /> {t.enums.pressure.stable}
+        <span className="legend-dot" style={{ background: TONE_HEX.high }} /> {t.enums.pressure.high}
+        <span className="legend-dot" style={{ background: TONE_HEX.critical }} /> {t.enums.pressure.critical}
+        <span className="legend-item">{t.networkMap.legendRoutes}</span>
       </div>
 
       <div className="network-map-shell">
@@ -196,9 +201,9 @@ export function NetworkMapPage() {
                 <br />
                 {hospital.icu_types.join(", ")}
                 <br />
-                {hospital.available_beds} / {hospital.total_beds} beds open
+                {hospital.available_beds} / {hospital.total_beds} {t.capacity.bedsOpen}
                 <br />
-                Pressure: {formatStatus(pressureByHospital.get(hospital.id) ?? "unknown")}
+                {t.networkMap.pressure} {pressureLabel(pressureByHospital.get(hospital.id) ?? "stable")}
               </Popup>
             </Marker>
           ))}
@@ -207,9 +212,9 @@ export function NetworkMapPage() {
               <Popup>
                 <strong>{ambulance.call_sign}</strong>
                 <br />
-                {formatStatus(ambulance.status)}
+                {ambulanceStatusLabel(ambulance.status)}
                 <br />
-                {ambulance.speed_kph ? `${Math.round(ambulance.speed_kph)} km/h` : "Stopped"}
+                {ambulance.speed_kph ? `${Math.round(ambulance.speed_kph)} km/h` : t.networkMap.stopped}
               </Popup>
             </Marker>
           ))}

@@ -2,9 +2,12 @@ import { useMemo, useState } from "react";
 import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
 import { useAuth } from "../state/AuthContext";
 import { hospitalCode } from "../lib/constants";
+import { useLanguage } from "../i18n/LanguageContext";
+import { LanguageSwitcher } from "../components/LanguageSwitcher";
 
 export function LoginPage() {
   const { hospitals, backendOnline, loginBusy, loginError, signIn } = useAuth();
+  const { t } = useLanguage();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
@@ -22,23 +25,20 @@ export function LoginPage() {
           <ShieldCheck size={14} /> Colombo Emergency Network
         </div>
         <div className="login-headline">
-          <h1>ICU Capacity-Aware Emergency Transfer Console</h1>
-          <p>
-            Live bed capacity, urgency-aware routing, and ambulance dispatch across nine
-            Colombo hospitals — coordinated from one command console.
-          </p>
+          <h1>{t.login.heroTitle}</h1>
+          <p>{t.login.heroSubtitle}</p>
           <div className="login-metrics">
             <div>
               <strong>{hospitals.length || 9}</strong>
-              <span>Hospitals</span>
+              <span>{t.login.hospitalsLabel}</span>
             </div>
             <div>
               <strong>{totals.totalBeds || "—"}</strong>
-              <span>ICU beds</span>
+              <span>{t.login.icuBedsLabel}</span>
             </div>
             <div>
               <strong>{totals.availableBeds || "—"}</strong>
-              <span>Open now</span>
+              <span>{t.login.openNowLabel}</span>
             </div>
           </div>
         </div>
@@ -70,16 +70,19 @@ export function LoginPage() {
               <ShieldCheck size={20} />
             </span>
             <div>
-              <h2>ICU Command</h2>
-              <p>Sri Lanka Ministry of Health</p>
+              <h2>{t.login.title}</h2>
+              <p>{t.login.subtitle}</p>
             </div>
           </div>
 
-          <h1>Welcome back</h1>
-          <p className="lede">Sign in to access the command console.</p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h1 style={{ margin: 0 }}>{t.login.welcomeBack}</h1>
+            <LanguageSwitcher compact />
+          </div>
+          <p className="lede">{t.login.signInPrompt}</p>
 
           <label className="login-field">
-            Username
+            {t.login.username}
             <input
               type="text"
               autoComplete="username"
@@ -89,13 +92,13 @@ export function LoginPage() {
             />
           </label>
           <label className="login-field">
-            Password
+            {t.login.password}
             <input
               type="password"
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="Password"
+              placeholder={t.login.password}
             />
           </label>
 
@@ -108,16 +111,16 @@ export function LoginPage() {
           <button type="submit" className="login-submit" disabled={!username.trim() || !password || loginBusy}>
             {loginBusy ? (
               <>
-                <Loader2 size={16} className="spin" /> Signing in…
+                <Loader2 size={16} className="spin" /> {t.login.signingIn}
               </>
             ) : (
-              "Sign in"
+              t.login.signIn
             )}
           </button>
 
           <div className={backendOnline ? "login-system-ready online" : "login-system-ready"}>
             <span className="dot" />
-            {backendOnline ? "All hospital services operational" : "Connecting to hospital services…"}
+            {backendOnline ? t.login.systemReady : t.login.connecting}
           </div>
         </form>
       </section>
