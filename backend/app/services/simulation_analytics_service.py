@@ -138,7 +138,9 @@ class SimulationAnalyticsService:
         for index, forecast in enumerate(forecasts):
             weight = self._hospital_weight(forecast, scenario)
             if index == len(forecasts) - 1:
-                projected_arrivals = remaining_arrivals
+                # Rounding the earlier shares can overshoot the total; without the
+                # clamp the remainder goes negative and *adds* beds to this hospital.
+                projected_arrivals = max(0, remaining_arrivals)
             else:
                 projected_arrivals = round(total_arrivals * weight / max(total_weight, 1))
                 remaining_arrivals -= projected_arrivals

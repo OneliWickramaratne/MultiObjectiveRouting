@@ -58,6 +58,7 @@ class OSMGraphRoutingService:
         self._node_ids: np.ndarray | None = None
         self._latitudes: np.ndarray | None = None
         self._longitudes: np.ndarray | None = None
+        self._max_speed_mps: float | None = None
         self._route_cache: dict[tuple[str, str, str, str, float], OSMGraphRoute] = {}
         self._load_attempted = False
         self._lock = threading.Lock()
@@ -148,7 +149,7 @@ class OSMGraphRoutingService:
                 self._graph,
                 origin_node,
                 destination_node,
-                heuristic=lambda _first, _second: 0.0,
+                heuristic=self._time_heuristic(destination_node, congestion_ratio),
                 weight=edge_weight,
             )
             result = self._route_result(nodes, congestion_ratio)
@@ -178,24 +179,71 @@ class OSMGraphRoutingService:
                 graph = nx.read_graphml(self.graph_path)
                 if not graph.is_directed():
                     graph = graph.to_directed()
-                self._graph = nx.DiGraph(graph)
-                self._node_ids = np.array(list(self._graph.nodes), dtype=object)
-                self._latitudes = np.array(
-                    [float(self._graph.nodes[node]["y"]) for node in self._node_ids],
+                graph = nx.DiGraph(graph)
+                node_ids = np.array(list(graph.nodes), dtype=object)
+                if len(node_ids) == 0:
+                    return False
+                latitudes = np.array(
+                    [float(graph.nodes[node]["y"]) for node in node_ids],
                     dtype=float,
                 )
-                self._longitudes = np.array(
-                    [float(self._graph.nodes[node]["x"]) for node in self._node_ids],
+                longitudes = np.array(
+                    [float(graph.nodes[node]["x"]) for node in node_ids],
                     dtype=float,
                 )
-                return len(self._node_ids) > 0
-            except (OSError, nx.NetworkXError, KeyError, TypeError, ValueError, ET.ParseError):
+                fastest_kph = max(
+                    (
+                        float(data.get("speed_kph", 0.0))
+                        for _first, _second, data in graph.edges(data=True)
+                    ),
+                    default=0.0,
+                )
+                self._node_ids = node_ids
+                self._latitudes = latitudes
+                self._longitudes = longitudes
+                self._max_speed_mps = max(fastest_kph, 5.0) / 3.6
+                # Published last: readers take an unlocked fast path on `_graph`,
+                # so it must only become visible once the lookup arrays are ready.
+                self._graph = graph
+                return True
+            except Exception:  # noqa: BLE001
                 # A missing, truncated, or corrupted graph file must never
                 # crash a caller — this is exactly the fail-open behavior
                 # the routing fallback chain (OSM -> live Google -> cached
                 # traffic model -> direct fallback) depends on.
                 self._graph = None
+                self._node_ids = None
+                self._latitudes = None
+                self._longitudes = None
                 return False
+
+    def _time_heuristic(self, destination_node: str, congestion_ratio: float):
+        """Admissible straight-line travel-time estimate to the destination.
+
+        Uses the fastest road speed in the graph and the same congestion factor
+        as the edge weights, so it never overestimates the remaining cost (edge
+        risk only ever adds to it) and A* still returns the optimal path. The
+        previous constant-zero heuristic silently degraded A* to Dijkstra.
+        """
+        if self._graph is None:
+            raise ValueError("OSM graph is not loaded")
+        destination_data = self._graph.nodes[destination_node]
+        destination_latitude = float(destination_data["y"])
+        destination_longitude = float(destination_data["x"])
+        speed_mps = self._max_speed_mps or (90.0 / 3.6)
+        congestion = max(congestion_ratio, 0.1)
+
+        def heuristic(node: str, _target: str) -> float:
+            node_data = self._graph.nodes[node]
+            straight_line_meters = self._haversine_meters(
+                float(node_data["y"]),
+                float(node_data["x"]),
+                destination_latitude,
+                destination_longitude,
+            )
+            return straight_line_meters / speed_mps * congestion
+
+        return heuristic
 
     def _nearest_node(self, latitude: float, longitude: float) -> str:
         if self._node_ids is None or self._latitudes is None or self._longitudes is None:
@@ -222,6 +270,8 @@ class OSMGraphRoutingService:
         previous_bearing: float | None = None
         total_signals = 0
         total_intersections = 0
+        has_edge_signal_data = False
+        has_edge_intersection_data = False
         total_high_risk_meters = 0.0
         total_primary_meters = 0.0
         total_residential_meters = 0.0
@@ -231,8 +281,14 @@ class OSMGraphRoutingService:
             edge_risk = float(edge.get("risk", 0.0))
             edge_seconds = self._edge_travel_seconds(edge, congestion_ratio)
             highway = str(edge.get("highway", "")).lower()
-            total_signals += self._numeric_edge_value(edge, ("traffic_signals", "signals", "signal_count"))
-            total_intersections += self._numeric_edge_value(edge, ("intersections", "intersection_count", "junctions"))
+            edge_signals = self._numeric_edge_value(edge, ("traffic_signals", "signals", "signal_count"))
+            if edge_signals is not None:
+                total_signals += edge_signals
+                has_edge_signal_data = True
+            edge_intersections = self._numeric_edge_value(edge, ("intersections", "intersection_count", "junctions"))
+            if edge_intersections is not None:
+                total_intersections += edge_intersections
+                has_edge_intersection_data = True
             if edge_risk >= 1.0:
                 total_high_risk_meters += edge_length
             if any(kind in highway for kind in ("primary", "trunk", "motorway")):
@@ -249,7 +305,6 @@ class OSMGraphRoutingService:
             )
             road_name = self._edge_road_name(edge)
             maneuver = "depart" if previous_bearing is None else self._maneuver(previous_bearing, current_bearing)
-            step_index = len(route_steps)
             if (
                 route_steps
                 and route_steps[-1].road_name == road_name
@@ -290,6 +345,13 @@ class OSMGraphRoutingService:
             estimated_seconds += edge_seconds
             distance_weighted_risk += edge_risk * edge_length
 
+        # Most OSM exports tag signals and junctions on nodes rather than edges,
+        # so only trust the edge counters when the graph actually carries them.
+        if not has_edge_signal_data:
+            total_signals = self._count_signal_nodes(nodes)
+        if not has_edge_intersection_data:
+            total_intersections = self._count_junction_nodes(nodes)
+
         polyline = [
             [
                 float(self._graph.nodes[node]["y"]),
@@ -310,17 +372,34 @@ class OSMGraphRoutingService:
             "node_count": len(nodes),
         }
         risk_factors = self._risk_factors(risk_score, risk_features, congestion_ratio)
+        # Clamp once: the explanation used to report the unclamped value, so a
+        # short route claimed "0.4 min" while estimated_seconds said 60.
+        total_seconds = max(estimated_seconds, 60.0)
         return OSMGraphRoute(
             node_ids=[str(node) for node in nodes],
             polyline=polyline,
             distance_km=round(distance_meters / 1000, 3),
-            estimated_seconds=round(max(estimated_seconds, 60.0), 1),
+            estimated_seconds=round(total_seconds, 1),
             risk_score=risk_score,
             route_steps=route_steps,
             risk_features=risk_features,
             risk_factors=risk_factors,
-            explanation=self._route_explanation(distance_meters, estimated_seconds, risk_score, risk_factors),
+            explanation=self._route_explanation(distance_meters, total_seconds, risk_score, risk_factors),
         )
+
+    def _count_signal_nodes(self, nodes: list[str]) -> int:
+        if self._graph is None:
+            return 0
+        return sum(
+            1
+            for node in nodes[1:-1]
+            if str(self._graph.nodes[node].get("highway", "")).lower() == "traffic_signals"
+        )
+
+    def _count_junction_nodes(self, nodes: list[str]) -> int:
+        if self._graph is None:
+            return 0
+        return sum(1 for node in nodes[1:-1] if self._graph.out_degree(node) >= 3)
 
     @staticmethod
     def _edge_road_name(data: dict) -> str:
@@ -377,7 +456,8 @@ class OSMGraphRoutingService:
         return f"Proceed on {road_name} for {distance}"
 
     @staticmethod
-    def _numeric_edge_value(data: dict, keys: tuple[str, ...]) -> int:
+    def _numeric_edge_value(data: dict, keys: tuple[str, ...]) -> int | None:
+        """First parseable value for `keys`, or None if the edge carries none."""
         for key in keys:
             raw_value = data.get(key)
             if raw_value is None:
@@ -386,7 +466,7 @@ class OSMGraphRoutingService:
                 return int(float(raw_value))
             except (TypeError, ValueError):
                 continue
-        return 0
+        return None
 
     @staticmethod
     def _risk_factors(risk_score: float, risk_features: dict, congestion_ratio: float) -> list[str]:

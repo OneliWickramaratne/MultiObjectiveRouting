@@ -40,8 +40,15 @@ class CapacityForecastService:
 
     def forecast_hospital(self, db: Session, hospital: HospitalModel) -> HospitalCapacityForecast:
         beds = db.query(ICUBedModel).filter(ICUBedModel.hospital_id == hospital.id).all()
-        total_beds = len(beds) or hospital.total_beds
-        current_available = sum(1 for bed in beds if bed.status == "available")
+        if beds:
+            total_beds = len(beds)
+            current_available = sum(1 for bed in beds if bed.status == "available")
+        else:
+            # No per-bed rows: fall back to the hospital counters instead of
+            # reporting zero availability, which reads as 100% occupancy and
+            # pushes every horizon to "critical".
+            total_beds = hospital.total_beds
+            current_available = max(hospital.total_beds - hospital.occupied_beds, 0)
         current_occupied = max(total_beds - current_available, 0)
         inbound_transfers = self._active_inbound_transfers(db, hospital.id)
         discharge_rate_12h = self._recent_bed_release_rate(db, hospital.id)

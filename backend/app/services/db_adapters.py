@@ -23,6 +23,7 @@ def hospital_from_model(db: Session, hospital: HospitalModel) -> Hospital:
         IcuWardCapacity(icu_type=icu_type, total_beds=total, occupied_beds=occupied)
         for icu_type, (total, occupied) in capacity_by_type.items()
     ) or (IcuWardCapacity(icu_type=hospital.icu_type, total_beds=hospital.total_beds, occupied_beds=hospital.occupied_beds),)
+    reference = get_static_hospital(hospital.id)
     return Hospital(
         id=hospital.id,
         name=hospital.name,
@@ -35,6 +36,12 @@ def hospital_from_model(db: Session, hospital: HospitalModel) -> Hospital:
         supports_pediatric=hospital.supports_pediatric,
         supports_maternity=hospital.supports_maternity,
         has_ventilator_support=hospital.has_ventilator_support,
+        # The DB table has no risk_modifier/aliases columns. Without carrying
+        # them over from the static reference list they silently default to
+        # 0.0/(), which zeroes the per-hospital risk term that
+        # TrafficModelService._fallback_feature_row multiplies by 10.
+        aliases=reference.aliases if reference else (),
+        risk_modifier=reference.risk_modifier if reference else 0.0,
     )
 
 
