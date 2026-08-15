@@ -200,7 +200,11 @@ class TrafficModelService:
             row = self._fallback_feature_row(origin, destination)
 
         hour = when.hour
-        minute = when.minute
+        # Observations were collected on the half hour, so the trained models
+        # only ever saw minute 0 or 30. Bucket the same way the pair template
+        # lookup and the prediction cache key already do; feeding the raw
+        # minute through would put the model off its training distribution.
+        minute = 30 if when.minute >= 30 else 0
         dayofweek = when.weekday()
         row.update(
             {
