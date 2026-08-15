@@ -20,11 +20,27 @@ more importantly for a triage context, the best recall on the "critical"
 class (0.79 vs. 0.74 for the other two models). Since a missed critical
 case (false negative) is clinically more costly than an over-triaged
 moderate case, recall on the critical class is a more meaningful
-comparison metric than raw accuracy alone. This is the model selected and
-saved as the production urgency-prediction artifact.
+comparison metric than raw accuracy alone. Of the three candidates,
+Gradient Boosting is therefore the one worth carrying forward.
+
+**What the deployed system uses:** the urgency scorer running in the
+application is the deterministic rule set in
+`backend/app/services/urgency_service.py`, not any of the three models
+above. This is a deliberate MVP choice, for two reasons. First, the rule
+set is inspectable: every score is returned alongside the specific factors
+that produced it, which matters for a tool that advises clinicians rather
+than deciding for them. Second, the models above are trained on synthetic
+scenarios, so their accuracy measures agreement with generated labels, not
+with validated clinical outcomes.
+
+The comparison is therefore an offline baseline that establishes what a
+learned scorer could achieve on this feature set. Replacing the rules with
+the Gradient Boosting model is future work, and depends on real labelled
+transfer data and clinical review rather than on further tuning.
 
 Full classification reports for all three models are in
-`ml/artifacts/model_report.txt`.
+`ml/artifacts/model_report.txt`, reproducible with
+`python ml/train_urgency_model.py`.
 
 ## 2. Routing Strategy Evaluation: Shortest-Time vs. Urgency-Aware Risk Routing
 

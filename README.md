@@ -30,6 +30,28 @@ Do not start only the frontend with `npm run dev`; hospital dropdowns,
 recommendations, beds, ambulances, and dashboards all require the backend on
 port `8001`.
 
+## Trained model artifacts (required on a fresh clone)
+
+The `.joblib` artifacts under `ml/artifacts/` are **not** in the repository —
+they are gitignored, and the congestion model exceeds GitHub's 100 MiB file
+limit. A fresh clone therefore has no trained models, and the backend falls
+back to a deterministic travel-time formula whose numbers do not reproduce the
+results in [docs/evaluation_results.md](docs/evaluation_results.md).
+
+Regenerate them once after cloning:
+
+```bash
+python ml/train_traffic_models.py   # congestion + duration models
+python ml/train_urgency_model.py    # offline urgency baseline, see note below
+```
+
+The backend logs a warning at startup if the traffic models are missing, so
+check the startup output before trusting any travel-time figure.
+
+The urgency script is only needed to reproduce the model comparison in the
+evaluation docs. The running system does not load it: urgency scoring is the
+deterministic rule set in `backend/app/services/urgency_service.py`.
+
 ## Security baseline
 
 Protected endpoints use real username/password authentication. Passwords are
