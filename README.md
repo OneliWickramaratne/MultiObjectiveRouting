@@ -2,6 +2,37 @@
 
 Decision-support system for inter-hospital emergency ICU transfers in Colombo.
 
+## First-time setup
+
+Skip to "Start the application" if you have already done this once.
+
+```bash
+cp .env.example .env      # then fill in AUTH_JWT_SECRET and POSTGRES_PASSWORD
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Generate a secret for `AUTH_JWT_SECRET` rather than inventing one by hand:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+The backend runs on SQLite in development and creates
+`backend/hospital_dss_dev.db` on first bootstrap, so no database server is
+needed to get started.
+
+## Run the tests
+
+From `backend/`, with the virtual environment active. The suite is written
+against the standard library, so it needs nothing beyond `requirements.txt`:
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
 ## Start the application
 
 Backend (from the `backend/` folder, with the virtual environment active):

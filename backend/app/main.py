@@ -63,13 +63,17 @@ def readiness_check() -> dict[str, str]:
 
 def warmup_models() -> None:
     # Pay model/feature loading cost during startup, not on the first user click.
+    # The traffic models are loaded first so the warning below lands while the
+    # operator is still watching the log; warming the OSM graph takes long
+    # enough that a warning after it would scroll past unnoticed.
     for routing_service in (routes.service, transfers.service.routing_service):
         traffic_model = routing_service.traffic_model
         _ = traffic_model.feature_lookup
         _ = traffic_model.congestion_model
         _ = traffic_model.duration_model
-        routing_service.osm_graph.warmup()
     _warn_if_traffic_models_missing()
+    for routing_service in (routes.service, transfers.service.routing_service):
+        routing_service.osm_graph.warmup()
 
 
 def _warn_if_traffic_models_missing() -> None:
