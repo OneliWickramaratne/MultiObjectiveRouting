@@ -1,5 +1,17 @@
 # Testing Guide
 
+This guide assumes the virtual environment and `.env` already exist. On a
+fresh clone, follow "First-time setup" in the root `README.md` first.
+
+## Run the Unit Tests
+
+From `backend/`. The suite is plain `unittest` and needs nothing beyond
+`requirements.txt`:
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
 ## Start Backend
 
 ```bash
@@ -23,8 +35,11 @@ Use:
 GET /api/traffic/status
 ```
 
-Expected without a Google key, once trained models and feature data are
-placed under `ml/artifacts/` and `data/`:
+The `.joblib` artifacts are gitignored, so a fresh clone reports `false` for
+both models until they are regenerated (see "Train Traffic Models" below).
+The backend also logs a warning at startup when they are missing.
+
+Expected without a Google key, once the models have been trained:
 
 ```json
 {
@@ -164,20 +179,23 @@ data/traffic_observations_live.csv
 
 ## Train Traffic Models
 
-Run only when the drive has enough free space:
+Required on a fresh clone: the artifacts are gitignored, and without them
+travel times fall back to the deterministic formula.
 
 ```bash
-cd ml
-python train_traffic_models.py --profile balanced
+python ml/train_traffic_models.py
 ```
 
-Available profiles:
+Available profiles, via `--profile`:
 
 ```text
 compact   smallest artifacts
-balanced  recommended default
+balanced  recommended default, used when --profile is omitted
 research  heavier final-experiment models
 ```
+
+The script refuses to start if it detects less free disk space than the
+chosen profile needs. Override that check with `--skip-space-check`.
 
 Outputs:
 
@@ -207,5 +225,22 @@ python scripts/eval_simulation.py
 python scripts/generate_capacity_chart.py
 ```
 
-The traffic model comparison is trained and charted in Colab — see
-`colab/03_traffic_model_training/train_traffic_model.ipynb`.
+The traffic model comparison is trained by the same script used to produce
+the artifacts:
+
+```bash
+python ml/train_traffic_models.py
+```
+
+It reports MAE, RMSE and R² for random forest, extra trees and gradient
+boosting on both targets, and writes the full comparison to
+`ml/artifacts/traffic_model_report.txt`.
+
+The urgency comparison in section 1 is reproduced by:
+
+```bash
+python ml/train_urgency_model.py
+```
+
+which writes `ml/artifacts/model_report.txt` with the per-model
+classification reports.

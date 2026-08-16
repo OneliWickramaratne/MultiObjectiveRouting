@@ -18,9 +18,9 @@ The system is decision support only. Recommendations must remain explainable and
 - `backend/scripts/` contains the migration bootstrap script and the reproducible evaluation scripts (`eval_routing.py`, `eval_dispatch.py`, `eval_simulation.py`) and their chart generators, each calling the production service classes directly rather than a separate simulation.
 - `frontend/src/pages/` contains one file per screen (Overview, Transfer planner, Requests, Fleet, Capacity, ICU beds, Transfers, Alerts, Network map, Active mission).
 - `frontend/src/components/ThreeDNavigationMap.tsx` provides MapLibre-based driver navigation.
-- `ml/` contains the synthetic urgency dataset, training scripts, and trained model artifacts. `colab/` contains the traffic-data-collection and traffic-model-training notebooks (large datasets/artifacts are kept in Drive, not committed — see `colab/README.md`).
+- `ml/` contains the synthetic urgency dataset and the training scripts for both the urgency baseline (`train_urgency_model.py`) and the traffic congestion/duration models (`train_traffic_models.py`). The `.joblib` artifacts they produce are gitignored rather than committed, so a fresh clone regenerates them by running those two scripts; see the root `README.md`.
 - `data/osm/colombo_drive.graphml` is the real Colombo road network graph used by OSM routing (63,951 nodes, 126,278 edges).
-- `docs/` contains architecture, API, database, traffic-model, testing, deployment, operations, and evaluation-results documentation.
+- `docs/` contains architecture, API, database, traffic-model, testing, deployment, security, and evaluation-results documentation; `docs/README.md` indexes them in a suggested reading order.
 
 ## Backend Entry Points
 
