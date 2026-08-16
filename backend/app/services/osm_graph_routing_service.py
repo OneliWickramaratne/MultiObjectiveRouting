@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import os
 import threading
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 

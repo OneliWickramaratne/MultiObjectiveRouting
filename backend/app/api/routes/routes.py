@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import HospitalModel
 from app.schemas import RouteOptimizationResponse, RouteRequest
 from app.services.db_adapters import hospital_from_model, resolve_hospital_model
 from app.services.routing_service import RoutingService

@@ -302,7 +302,7 @@ def _ensure_realistic_patient(db, hospital: HospitalModel, bed: ICUBedModel) -> 
     patient.infection_risk = patient.infection_risk or ("contact precautions" if seed_index in {2, 5} else "standard")
     patient.emergency_contact = patient.emergency_contact or f"Family contact / 077 {2100000 + seed_index * 731 + bed_number:07d}"
     patient.next_of_kin = patient.next_of_kin or f"{name.split()[0]} family representative"
-    patient.address = patient.address or f"Colombo District, Western Province"
+    patient.address = patient.address or "Colombo District, Western Province"
     patient.notes = patient.notes or "Synthetic demonstration record for ICU workflow testing."
     patient.updated_at = utcnow()
 

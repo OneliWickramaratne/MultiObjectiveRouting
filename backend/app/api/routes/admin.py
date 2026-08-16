@@ -43,9 +43,7 @@ from app.schemas import (
 )
 from app.services.capacity_forecast_service import CapacityForecastService
 from app.services.resource_claim_service import claim_available_bed
-from app.services.db_adapters import hospital_from_model
 from app.services.dispatch_service import DispatchService
-from app.services.routing_service import RoutingService
 from app.services.sensitive_data import redact_sensitive
 from app.services.simulation_analytics_service import SimulationAnalyticsService
 from app.services.transfer_state_machine import (
