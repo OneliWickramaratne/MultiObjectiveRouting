@@ -1,7 +1,18 @@
 import type { AuthTokenResponse } from "../types";
 
+// In hosted/production builds, set VITE_API_BASE_URL (e.g. on Vercel) to
+// your backend's real public URL. When unset — i.e. local development —
+// this falls back to exactly the same local candidates as before, so
+// nothing changes for local dev.
+const envApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+
 export const API_BASE_CANDIDATES = Array.from(
-  new Set(["http://127.0.0.1:8001", "http://127.0.0.1:8000"].filter(Boolean) as string[]),
+  new Set(
+    (envApiBase
+      ? [envApiBase.replace(/\/+$/, "")]
+      : ["http://127.0.0.1:8001", "http://127.0.0.1:8000"]
+    ).filter(Boolean) as string[],
+  ),
 );
 
 let activeApiBase = API_BASE_CANDIDATES[0];
@@ -11,6 +22,7 @@ let refreshPromise: Promise<AuthTokenResponse | null> | null = null;
 // The auth layer is intentionally decoupled from React: AuthProvider wires
 // this up once at startup so token expiry can trigger a logout anywhere.
 let onAuthenticationFailed: () => void = () => {};
+
 export function setOnAuthenticationFailed(handler: () => void) {
   onAuthenticationFailed = handler;
 }
@@ -57,7 +69,7 @@ export async function refreshAccessToken(): Promise<AuthTokenResponse | null> {
         activeApiBase = base;
         return payload;
       } catch {
-        // Try the next configured local backend.
+        // Try the next configured backend candidate.
       }
     }
     accessToken = null;
@@ -103,5 +115,8 @@ export function websocketBase() {
   return activeApiBase.replace(/^http/, "ws");
 }
 
+// This message is shown to the user when the backend can't be reached.
+// Previously referenced START_APP.cmd, a local-only Windows launcher that
+// was removed from the project and makes no sense to a hosted user anyway.
 export const BACKEND_OFFLINE_MESSAGE =
-  "Backend is offline. Start the app with START_APP.cmd; reconnecting automatically...";
+  "Backend is temporarily unavailable. Reconnecting automatically\u2026";
