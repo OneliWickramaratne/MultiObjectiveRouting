@@ -9,6 +9,15 @@ from app.config import settings
 
 
 DATABASE_URL = settings.database_url
+# Some hosts (Railway, Render, Heroku-style) hand back a bare postgres:// or
+# postgresql:// URL with no driver specified. SQLAlchemy then defaults to the
+# old psycopg2, which this project never installs (it uses psycopg v3
+# throughout local dev and Docker) — so explicitly normalize to psycopg here,
+# regardless of which host's URL format we're given.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+elif DATABASE_URL.startswith("postgresql://") and "+psycopg" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 is_sqlite = DATABASE_URL.startswith("sqlite")
 connect_args: dict = {"check_same_thread": False} if is_sqlite else {}
 engine_options: dict = {
