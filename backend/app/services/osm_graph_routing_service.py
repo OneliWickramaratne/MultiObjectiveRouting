@@ -152,7 +152,7 @@ class OSMGraphRoutingService:
                 weight=edge_weight,
             )
             result = self._route_result(nodes, congestion_ratio)
-            if len(self._route_cache) > 512:
+            if len(self._route_cache) > 40:
                 self._route_cache.clear()
             self._route_cache[cache_key] = result
             return result
