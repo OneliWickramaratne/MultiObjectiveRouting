@@ -178,7 +178,8 @@ class OSMGraphRoutingService:
                 graph = nx.read_graphml(self.graph_path)
                 if not graph.is_directed():
                     graph = graph.to_directed()
-                graph = nx.DiGraph(graph)
+                if type(graph) is not nx.DiGraph:
+                    graph = nx.DiGraph(graph)
                 node_ids = np.array(list(graph.nodes), dtype=object)
                 if len(node_ids) == 0:
                     return False
